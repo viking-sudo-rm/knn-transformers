@@ -57,6 +57,7 @@ from transformers.utils.versions import require_version
 
 from knnlm import KNNWrapper, KNNSaver, KEY_TYPE, DIST
 from retomaton import RetomatonWrapper
+from dfa_retomaton import DfaRetomatonWrapper
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.11.0.dev0")
@@ -236,6 +237,9 @@ class KNNArguments:
     sample_size: int = field(default=20000000)
     members: str = field(default=None)
 
+    ## New RetoMaton args:
+    dfa_retomaton: bool = field(default=False)
+
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -414,7 +418,16 @@ def main():
     dimension = model.config.hidden_size
     knn_wrapper = None
     knn_args.seed = training_args.seed
-    if knn_args.retomaton or knn_args.cluster_dstore:
+    if knn_args.dfa_retomaton:
+        knn_wrapper = DfaRetomatonWrapper(dstore_size=knn_args.dstore_size, dstore_dir=knn_args.dstore_dir, 
+            dimension=dimension, 
+            knn_sim_func=knn_args.knn_sim_func, knn_keytype=knn_args.knn_keytype,
+            no_load_keys=knn_args.no_load_keys, move_dstore_to_mem=knn_args.move_dstore_to_mem, knn_gpu=knn_args.knn_gpu,
+            recompute_dists=knn_args.recompute_dists,
+            k=knn_args.k, lmbda=knn_args.lmbda, knn_temp=knn_args.knn_temp, probe=knn_args.probe,
+            no_pointer=knn_args.no_pointer, min_knns=knn_args.min_knns, max_knns=knn_args.max_knns,
+            members=knn_args.members)
+    elif knn_args.retomaton or knn_args.cluster_dstore:
         knn_wrapper = RetomatonWrapper(dstore_size=knn_args.dstore_size, dstore_dir=knn_args.dstore_dir, 
             dimension=dimension, 
             knn_sim_func=knn_args.knn_sim_func, knn_keytype=knn_args.knn_keytype,

@@ -24,7 +24,7 @@ import scipy.sparse as sp
 logger = logging.getLogger(__name__)
 logger.setLevel(20)
 
-class RetomatonWrapper(KNNWrapper):
+class DfaRetomatonWrapper(KNNWrapper):
     def __init__(self, no_pointer=False, min_knns=1, max_knns=1024, members=None, **kwargs):
         super().__init__(**kwargs)
         self.no_pointer = no_pointer
