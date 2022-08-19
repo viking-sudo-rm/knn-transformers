@@ -6,4 +6,7 @@ python3 -u run_clm.py \
   --dataset_name wikitext --dataset_config_name wikitext-103-raw-v1 \
   --output_dir checkpoints/${MODEL} \
   --do_eval --eval_subset validation \
-  --dstore_dir checkpoints/${MODEL} --dfa_retomaton
+  --dstore_dir checkpoints/${MODEL} \
+  --dfa_retomaton \
+  --truncate_dstore=10000 \
+  --cache_path=cached

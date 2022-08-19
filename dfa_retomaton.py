@@ -11,6 +11,7 @@ from enum import Enum, auto
 from pathlib import Path
 import glob
 from itertools import zip_longest
+import pickle
 
 from tqdm import tqdm
 
@@ -21,15 +22,27 @@ import faiss.contrib.torch_utils
 from faiss import IndexFlatL2
 import scipy.sparse as sp
 
+from src.suffix_automaton import SuffixAutomatonBuilder
+from src.retriever import Retriever
+
 logger = logging.getLogger(__name__)
 logger.setLevel(20)
 
 class DfaRetomatonWrapper(KNNWrapper):
-    def __init__(self, no_pointer=False, min_knns=1, max_knns=1024, members=None, **kwargs):
+    def __init__(self,
+                 no_pointer: bool = False,
+                 min_knns: int = 1,
+                 max_knns: int = 1024,
+                 members=None,
+                 truncate_dstore: int = None,
+                 cache_path: str = None,
+                 **kwargs):
         super().__init__(**kwargs)
         self.no_pointer = no_pointer
         self.min_knns = min_knns
         self.max_knns = max_knns
+        self.truncate_dstore = truncate_dstore
+        self.cache_path = cache_path
 
         if members is None:
             available_member_files = glob.glob(f'{self.dstore_dir}/members*')
@@ -52,6 +65,33 @@ class DfaRetomatonWrapper(KNNWrapper):
         self.generate_cur_knns = torch.tensor([], dtype=torch.int64)
         self.generate_cur_dists = torch.tensor([], dtype=torch.float32)
         self.no_lookup_counter_history = []
+
+        dfa = self._get_suffix_automaton(self._get_values())
+        self.retriever = Retriever(dfa)
+
+    def _get_values(self):
+        """FIXME: Index differently on GCP?"""
+        path = "checkpoints/neulab/gpt2-finetuned-wikitext103"
+        vals_filename = "dstore_gpt2_116988150_768_vals.npy"
+        dstore_size = 19254850
+        values = np.memmap(os.path.join(path, vals_filename), dtype=np.int32, mode="r", shape=(dstore_size, 1))
+        if self.truncate_dstore is not None:
+            values = values[:self.truncate_dstore, :]
+        return values.squeeze(axis=1)
+
+    def _get_suffix_automaton(self, dstore):
+        """Build a suffix automaton over the data store. Can also save this in advance."""
+        builder = SuffixAutomatonBuilder()
+        logger.info("Building suffix automaton...")
+        builder.build(dstore)
+        logger.info("Adding failure transitions to suffix automaton...")
+        builder.add_failures()
+        logger.info("Suffix automaton built!")
+        if os.path.isdir("cached"):
+            with open(f"cached/dfa-{self.truncate_dstore}.pkl", "wb") as fh:
+                pickle.dump(builder.dfa, fh)
+        logger.info("Suffix automaton saved!")
+        return builder.dfa
 
     def post_forward_hook(self, module, input, output):
         shift = 0 if self.is_encoder_decoder else 1
@@ -80,10 +120,19 @@ class DfaRetomatonWrapper(KNNWrapper):
         cur_dists = torch.tensor([], dtype=torch.float32)
         no_lookup_counter = 0
 
-        for timestep_query, label in zip_longest(queries, captured_labels):
+        # Need a list so that types are converted to Pythonic ones correctly.
+        full_context = captured_labels.tolist()
+
+        for idx, (timestep_query, label) in enumerate(zip_longest(queries, captured_labels)):
             perform_search = False
             extended_pointers = None
-            pointers = cur_knns + 1
+            # pointers = cur_knns + 1
+
+            # Get pointers from suffix automaton instead of next token.
+            context = full_context[:idx]
+            # FIXME: Should only return unique elements here? Constructing a set will be slow.
+            suffix_pointers = set(self.retriever.gen_pointers(context))
+            pointers = torch.tensor(list(suffix_pointers), dtype=torch.long)
 
             if self.no_pointer or cur_knns.numel() < self.min_knns:
                 perform_search = True
@@ -110,7 +159,10 @@ class DfaRetomatonWrapper(KNNWrapper):
             if not self.no_pointer and label is not None:
                 vals_are_correct_and_pointer_available = (vals_at_knns == label) & (knns < self.dstore_size - 1)
                 cur_knns = knns[vals_are_correct_and_pointer_available]
-                cur_dists = dists[vals_are_correct_and_pointer_available]
+                if vals_are_correct_and_pointer_available.shape == torch.Size([0]):
+                    cur_dists = dists[vals_are_correct_and_pointer_available]
+                else:
+                    cur_dists = torch.tensor([], dtype=torch.float32)
                 cur_knns = cur_knns[cur_dists.argsort(descending=True)]
 
         interpolated_scores = KNNWrapper.interpolate(torch.stack(all_knn_probs), lm_logits, self.lmbda) # (nonpad, vocab)
