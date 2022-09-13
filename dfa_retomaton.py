@@ -10,8 +10,7 @@ from torch import nn
 from enum import Enum, auto
 from pathlib import Path
 import glob
-from itertools import zip_longest
-import pickle
+from itertools import zip_longest, islice, chain
 
 from tqdm import tqdm
 
@@ -28,6 +27,42 @@ from src.retriever import Retriever
 logger = logging.getLogger(__name__)
 logger.setLevel(20)
 
+
+def first_n(iterable, n):
+    return islice(iterable, 0, n)
+
+
+class _Metrics:
+
+    def __init__(self,
+                 n_hits: int = 0,
+                 n_total: int = 0,
+                 n_pointers: int = 0,
+                 n_initial: int = 0,
+                ):
+        self.n_hits = n_hits
+        self.n_total = n_total
+        self.n_pointers = n_pointers
+        self.n_initial = n_initial
+
+    def register(self) -> None:
+        self.n_total += 1
+
+    def register_hit(self, pointers) -> None:
+        self.n_hits += 1
+        self.n_pointers += len(pointers)
+    
+    def register_initial(self) -> None:
+        self.n_initial += 1
+    
+    def get_metrics_dict(self) -> dict:
+        return {
+            "hit_rate": self.n_hits / self.n_total,
+            "pointers_per_hit": self.n_pointers / self.n_hits,
+            "initial_rate": self.n_initial / self.n_total,
+        }
+
+
 class DfaRetomatonWrapper(KNNWrapper):
     def __init__(self,
                  no_pointer: bool = False,
@@ -35,14 +70,18 @@ class DfaRetomatonWrapper(KNNWrapper):
                  max_knns: int = 1024,
                  members=None,
                  truncate_dstore: int = None,
-                 cache_path: str = None,
+                 min_factor_length: int = 2,
+                 cache_path: str = "cached",
                  **kwargs):
         super().__init__(**kwargs)
         self.no_pointer = no_pointer
         self.min_knns = min_knns
         self.max_knns = max_knns
         self.truncate_dstore = truncate_dstore
+        # TODO: Should set this to the one used by KNN LM.
         self.cache_path = cache_path
+
+        self.metrics = _Metrics()
 
         if members is None:
             available_member_files = glob.glob(f'{self.dstore_dir}/members*')
@@ -66,32 +105,53 @@ class DfaRetomatonWrapper(KNNWrapper):
         self.generate_cur_dists = torch.tensor([], dtype=torch.float32)
         self.no_lookup_counter_history = []
 
-        dfa = self._get_suffix_automaton(self._get_values())
-        self.retriever = Retriever(dfa)
+        # Build or load the DFA and the retriever state.
+        self.dfa, self.solid_states = self._build_suffix_automaton()
+        self.retriever = self._build_retriever(min_factor_length=min_factor_length, max_pointers=self.max_knns)
 
     def _get_values(self):
         """FIXME: Index differently on GCP?"""
         path = "checkpoints/neulab/gpt2-finetuned-wikitext103"
         vals_filename = "dstore_gpt2_116988150_768_vals.npy"
-        dstore_size = 19254850
-        values = np.memmap(os.path.join(path, vals_filename), dtype=np.int32, mode="r", shape=(dstore_size, 1))
+        # self.dstore_size = 19254850
+        values = np.memmap(os.path.join(path, vals_filename), dtype=np.int32, mode="r", shape=(self.dstore_size, 1))
         if self.truncate_dstore is not None:
             values = values[:self.truncate_dstore, :]
         return values.squeeze(axis=1)
 
-    def _get_suffix_automaton(self, dstore):
-        """Build a suffix automaton over the data store. Can also save this in advance."""
+    def _build_suffix_automaton(self):
+        """Build a suffix automaton over the data store, or load it if it is cached."""
+        filename = f"{self.cache_path}/dfa-{self.truncate_dstore}.pkl"
+
+        if os.path.exists(filename):
+            logger.info(f"Loading suffix automaton from {filename}...")
+            with open(filename, "rb") as fh:
+                builder: SuffixAutomatonBuilder = pickle.load(fh)
+            logger.info("Suffix automaton loaded!")
+            return builder.dfa, builder.solid_states
+        dstore = self._get_values()
+        logger.info("Creating suffix DFA from scratch...")
         builder = SuffixAutomatonBuilder()
-        logger.info("Building suffix automaton...")
         builder.build(dstore)
-        logger.info("Adding failure transitions to suffix automaton...")
+        logger.info("Adding failure transitions...")
         builder.add_failures()
-        logger.info("Suffix automaton built!")
-        if os.path.isdir("cached"):
-            with open(f"cached/dfa-{self.truncate_dstore}.pkl", "wb") as fh:
-                pickle.dump(builder.dfa, fh)
-        logger.info("Suffix automaton saved!")
-        return builder.dfa
+        logger.info("Suffix DFA built!")
+        with open(filename, "wb") as fh:
+            pickle.dump(builder, fh)
+        logger.info(f"Suffix DFA saved to {filename}.")
+        return builder.dfa, builder.solid_states
+    
+    def _build_retriever(self, **kwargs):
+        path = f"{self.cache_path}/retriever-{self.truncate_dstore}.pkl"
+        if os.path.exists(path):
+            logger.info(f"Loading retriever from {path}...")
+            return Retriever.load(self.dfa, path, **kwargs)
+        logger.info("Creating new retriever state from scratch...")
+        retriever = Retriever.create(self.dfa, **kwargs)
+        logger.info(f"Retriever state built!")
+        retriever.save(path)
+        logger.info(f"Retriever state saved to {path}.")
+        return retriever
 
     def post_forward_hook(self, module, input, output):
         shift = 0 if self.is_encoder_decoder else 1
@@ -122,24 +182,27 @@ class DfaRetomatonWrapper(KNNWrapper):
 
         # Need a list so that types are converted to Pythonic ones correctly.
         full_context = captured_labels.tolist()
+        # TODO: A binary tree representation is possibly more efficient.
+        states = {self.dfa.initial}
 
         for idx, (timestep_query, label) in enumerate(zip_longest(queries, captured_labels)):
             perform_search = False
             extended_pointers = None
-            # pointers = cur_knns + 1
-
             # Get pointers from suffix automaton instead of next token.
-            context = full_context[:idx]
-            # FIXME: Should only return unique elements here? Constructing a set will be slow.
-            suffix_pointers = set(self.retriever.gen_pointers(context))
-            pointers = torch.tensor(list(suffix_pointers), dtype=torch.long)
+            # context = full_context[:idx]
+            # pointers_gen = first_n(self.retriever.gen_pointers(context), self.max_factor_pointers)
+            pointers_gen = self.retriever.gen_pointers(states)
+            # pointers = torch.tensor([p + 1 for p in pointers_gen], dtype=torch.long)
+            pointers = torch.tensor(list(pointers_gen))
 
-            if self.no_pointer or cur_knns.numel() < self.min_knns:
+            self.metrics.register()
+            if self.no_pointer or pointers.numel() < self.min_knns:
                 perform_search = True
                 self.no_lookup_counter_history.append(no_lookup_counter)
                 no_lookup_counter = 0
             else:
                 no_lookup_counter += 1
+                self.metrics.register_hit(pointers)
 
             if self.no_pointer:
                 extended_pointers = None
@@ -164,6 +227,28 @@ class DfaRetomatonWrapper(KNNWrapper):
                 else:
                     cur_dists = torch.tensor([], dtype=torch.float32)
                 cur_knns = cur_knns[cur_dists.argsort(descending=True)]
+
+                # Get the state associated with each new pointer.
+                # TODO: Could also used fixed-length contexts here.
+                if self.truncate_dstore is None:
+                    states.update(self.solid_states[ptr] for ptr in cur_knns)
+                else:
+                    # In this case it would make sense to feed the strings through the DFA.
+                    states.update(self.solid_states[ptr] for ptr in cur_knns[cur_knns < self.truncate_dstore])
+
+            # TODO: In practice, will we need to limit the max number of states? Probably not.
+
+            # Update the state pointers by following suffix automaton transitions.
+            token = label.item()
+            queue = list(states)
+            for state in queue:
+                states.remove(state)
+            for state in queue:
+                next_state, _ = self.dfa.next_state(state, token)
+                states.add(next_state)
+            
+            if len(states) == 1 and self.dfa.initial in states:
+                self.metrics.register_initial()
 
         interpolated_scores = KNNWrapper.interpolate(torch.stack(all_knn_probs), lm_logits, self.lmbda) # (nonpad, vocab)
         output[nonpad_mask] = interpolated_scores
@@ -224,9 +309,11 @@ class DfaRetomatonWrapper(KNNWrapper):
         return vectors_t
 
     def get_metrics(self):
-        return {'lookups_saved': np.sum(self.no_lookup_counter_history)/
+        metrics = {'lookups_saved': np.sum(self.no_lookup_counter_history)/
             (np.sum(self.no_lookup_counter_history) + len(self.no_lookup_counter_history)),
         }
+        metrics.update(self.metrics.get_metrics_dict())
+        return metrics
 
     def break_out(self):
         super().break_out()
@@ -240,7 +327,6 @@ class DfaRetomatonWrapper(KNNWrapper):
 
     def cluster_dstore(self, num_clusters, sample_size, model, batch_size=500000):
         keys_vals_prefix = get_dstore_path(self.dstore_dir, model.config.model_type, self.dstore_size, self.dimension)
-        breakpoint()
         keys = np.memmap(f'{keys_vals_prefix}_keys.npy', dtype=np.float16, mode='r', shape=(self.dstore_size, self.dimension))
 
         if sample_size > self.dstore_size:

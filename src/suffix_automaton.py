@@ -24,12 +24,14 @@ class SuffixAutomatonBuilder:
     self.L = {}
     self.F = {}
     self.last = None
+    self.solid_states = []
 
   def build(self, string: str):
     initial = self.dfa.new_state(list(range(-1, len(string))))
     self.L[initial] = 0
     self.F[initial] = None
     self.last = initial
+    self.solid_states.append(initial)
 
     for ptr, token in enumerate(string):
       self.extend(ptr, token)
@@ -39,6 +41,7 @@ class SuffixAutomatonBuilder:
     new = self.dfa.new_state([ptr])
     self.L[new] = self.L[self.last] + 1
     state = self.last
+    self.solid_states.append(new)
 
     # Traversr failure path to 1) add edges to new state and 2) find first state with `token` transition.
     while True:

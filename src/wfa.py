@@ -26,7 +26,7 @@ class WFA:
     self.failures: Dict[State, State] = {}
     self.edges_out = collections.defaultdict(list)
 
-  def next_state(self, state, token) -> State:
+  def next_state(self, state, token) -> tuple[State, Any]:
     """Return next state and transition weight of a token given the current state."""
     if (state, token) in self.transitions:
       return self.transitions[state, token]
