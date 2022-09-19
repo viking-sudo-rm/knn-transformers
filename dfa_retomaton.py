@@ -71,7 +71,7 @@ class DfaRetomatonWrapper(KNNWrapper):
                  members=None,
                  truncate_dstore: int = None,
                  min_factor_length: int = 2,
-                 cache_path: str = "cached",
+                 cache_path: str = ".cache",
                  **kwargs):
         super().__init__(**kwargs)
         self.no_pointer = no_pointer
@@ -117,7 +117,7 @@ class DfaRetomatonWrapper(KNNWrapper):
         values = np.memmap(os.path.join(path, vals_filename), dtype=np.int32, mode="r", shape=(self.dstore_size, 1))
         if self.truncate_dstore is not None:
             values = values[:self.truncate_dstore, :]
-        return values.squeeze(axis=1)
+        return values.reshape(-1)
 
     def _build_suffix_automaton(self):
         """Build a suffix automaton over the data store, or load it if it is cached."""

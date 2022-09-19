@@ -9,6 +9,7 @@ python3 -u run_clm.py \
   --dstore_dir checkpoints/${MODEL} \
   --dfa_retomaton \
   --min_factor_length=2 \
-  # The following should be enabled for debugging.
-  # --truncate_dstore=1000 \
   --cache_path=cached
+
+# For debugging, can add the following:
+# --truncate_dstore=1000

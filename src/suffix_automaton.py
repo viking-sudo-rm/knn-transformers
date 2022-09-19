@@ -24,6 +24,8 @@ class SuffixAutomatonBuilder:
     self.L = {}
     self.F = {}
     self.last = None
+    # TODO: Could represent insolid states here: more memory efficient.
+    # TODO: Instead, could do a binary array of size n.
     self.solid_states = []
 
   def build(self, string: str):
