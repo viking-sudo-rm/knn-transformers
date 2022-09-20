@@ -23,6 +23,8 @@ import scipy.sparse as sp
 
 from src.suffix_automaton import SuffixAutomatonBuilder
 from src.retriever import Retriever
+from src.retriever_builder import RetrieverBuilder
+from src.cache import Cache
 
 logger = logging.getLogger(__name__)
 logger.setLevel(20)
@@ -63,7 +65,7 @@ class _Metrics:
         }
 
 
-class DfaRetomatonWrapper(KNNWrapper):
+class SuffixDfaWrapper(KNNWrapper):
     def __init__(self,
                  no_pointer: bool = False,
                  min_knns: int = 1,
@@ -77,9 +79,8 @@ class DfaRetomatonWrapper(KNNWrapper):
         self.no_pointer = no_pointer
         self.min_knns = min_knns
         self.max_knns = max_knns
+        self.min_factor_length = min_factor_length
         self.truncate_dstore = truncate_dstore
-        # TODO: Should set this to the one used by KNN LM.
-        self.cache_path = cache_path
 
         self.metrics = _Metrics()
 
@@ -106,14 +107,24 @@ class DfaRetomatonWrapper(KNNWrapper):
         self.no_lookup_counter_history = []
 
         # Build or load the DFA and the retriever state.
-        self.dfa, self.solid_states = self._build_suffix_automaton()
-        self.retriever = self._build_retriever(min_factor_length=min_factor_length, max_pointers=self.max_knns)
+        cache_path = os.path.join(cache_path, str(self.truncate_dstore))
+        logger.info(f"Using cache in {cache_path}")
+        cache = Cache(cache_path, log_fn=logger.info)
+        cache.register_tuple(("dfa", "solid_states"), self._build_suffix_automaton)
+        self.dfa = cache.get("dfa")
+        self.solid_states = cache.get("solid_states")
+        cache.register("inverse_failures", lambda: RetrieverBuilder.build_inverse_failures(self.dfa))
+        cache.register("factor_lengths", lambda: RetrieverBuilder.build_factor_lengths(self.dfa))
+        inverse_failures = cache.get("inverse_failures")
+        factor_lengths = None if min_factor_length == 0 else cache.get("factor_lengths")
+        self.retriever = Retriever(self.dfa, inverse_failures, factor_lengths, min_factor_length, max_knns)
 
     def _get_values(self):
-        """FIXME: Index differently on GCP?"""
-        path = "checkpoints/neulab/gpt2-finetuned-wikitext103"
-        vals_filename = "dstore_gpt2_116988150_768_vals.npy"
-        # self.dstore_size = 19254850
+        # path = "checkpoints/neulab/gpt2-finetuned-wikitext103"
+        # vals_filename = "dstore_gpt2_116988150_768_vals.npy"
+        keys_vals_prefix = get_dstore_path(self.dstore_dir, model.config.model_type, self.dstore_size, self.dimension)
+        vals_filename = f'{keys_vals_prefix}_vals.npy'
+        # self.dstore_size == 19254850
         values = np.memmap(os.path.join(path, vals_filename), dtype=np.int32, mode="r", shape=(self.dstore_size, 1))
         if self.truncate_dstore is not None:
             values = values[:self.truncate_dstore, :]
@@ -121,14 +132,6 @@ class DfaRetomatonWrapper(KNNWrapper):
 
     def _build_suffix_automaton(self):
         """Build a suffix automaton over the data store, or load it if it is cached."""
-        filename = f"{self.cache_path}/dfa-{self.truncate_dstore}.pkl"
-
-        if os.path.exists(filename):
-            logger.info(f"Loading suffix automaton from {filename}...")
-            with open(filename, "rb") as fh:
-                builder: SuffixAutomatonBuilder = pickle.load(fh)
-            logger.info("Suffix automaton loaded!")
-            return builder.dfa, builder.solid_states
         dstore = self._get_values()
         logger.info("Creating suffix DFA from scratch...")
         builder = SuffixAutomatonBuilder()
@@ -136,22 +139,7 @@ class DfaRetomatonWrapper(KNNWrapper):
         logger.info("Adding failure transitions...")
         builder.add_failures()
         logger.info("Suffix DFA built!")
-        with open(filename, "wb") as fh:
-            pickle.dump(builder, fh)
-        logger.info(f"Suffix DFA saved to {filename}.")
         return builder.dfa, builder.solid_states
-    
-    def _build_retriever(self, **kwargs):
-        path = f"{self.cache_path}/retriever-{self.truncate_dstore}.pkl"
-        if os.path.exists(path):
-            logger.info(f"Loading retriever from {path}...")
-            return Retriever.load(self.dfa, path, **kwargs)
-        logger.info("Creating new retriever state from scratch...")
-        retriever = Retriever.create(self.dfa, **kwargs)
-        logger.info(f"Retriever state built!")
-        retriever.save(path)
-        logger.info(f"Retriever state saved to {path}.")
-        return retriever
 
     def post_forward_hook(self, module, input, output):
         shift = 0 if self.is_encoder_decoder else 1

@@ -57,7 +57,7 @@ from transformers.utils.versions import require_version
 
 from knnlm import KNNWrapper, KNNSaver, KEY_TYPE, DIST
 from retomaton import RetomatonWrapper
-from dfa_retomaton import DfaRetomatonWrapper
+from suffix_dfa import SuffixDfaWrapper
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.11.0.dev0")
@@ -238,10 +238,10 @@ class KNNArguments:
     members: str = field(default=None)
 
     ## New RetoMaton args:
-    dfa_retomaton: bool = field(default=False)
+    suffix_dfa: bool = field(default=False)
     truncate_dstore: int = field(default=None)
     min_factor_length: int = field(default=2)
-    cache_path: str = field(default=None)
+    cache_path: str = field(default=".cache")
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
@@ -421,8 +421,8 @@ def main():
     dimension = model.config.hidden_size
     knn_wrapper = None
     knn_args.seed = training_args.seed
-    if knn_args.dfa_retomaton:
-        knn_wrapper = DfaRetomatonWrapper(dstore_size=knn_args.dstore_size, dstore_dir=knn_args.dstore_dir, 
+    if knn_args.suffix_dfa:
+        knn_wrapper = SuffixDfaWrapper(dstore_size=knn_args.dstore_size, dstore_dir=knn_args.dstore_dir, 
             dimension=dimension, 
             knn_sim_func=knn_args.knn_sim_func, knn_keytype=knn_args.knn_keytype,
             no_load_keys=knn_args.no_load_keys, move_dstore_to_mem=knn_args.move_dstore_to_mem, knn_gpu=knn_args.knn_gpu,

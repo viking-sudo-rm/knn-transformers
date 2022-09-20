@@ -21,12 +21,22 @@ class SuffixAutomatonBuilder:
 
   def __init__(self):
     self.dfa = WFA(PointerSemiring())
-    self.L = {}
-    self.F = {}
-    self.last = None
     # TODO: Could represent insolid states here: more memory efficient.
     # TODO: Instead, could do a binary array of size n.
     self.solid_states = []
+
+    # Transient fields: don't save when we pickle.
+    self.L = {}
+    self.F = {}
+    self.last = None
+  
+  def __getstate__(self):
+    """We only save dfa and solid_states."""
+    return self.dfa, self.solid_states
+  
+  def __setstate__(self, state):
+    """Don't initialize other fields: kinda hacky."""
+    self.dfa, self.solid_states = state
 
   def build(self, string: str):
     initial = self.dfa.new_state(list(range(-1, len(string))))
