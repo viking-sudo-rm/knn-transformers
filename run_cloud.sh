@@ -1,7 +1,7 @@
 #!/usr/bin/sh
 MODEL=neulab/gpt2-finetuned-wikitext103
-DSTORE_DIR=gcs/input/checkpoints/${MODEL}
-OUTPUT_DIR=gcs/output/${MODEL}
+DSTORE_DIR=cloud/input/checkpoints/${MODEL}
+OUTPUT_DIR=cloud/output/${MODEL}
 
 python3 -u run_clm.py \
   --suffix_dfa \
