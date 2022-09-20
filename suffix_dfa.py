@@ -120,12 +120,10 @@ class SuffixDfaWrapper(KNNWrapper):
         self.retriever = Retriever(self.dfa, inverse_failures, factor_lengths, min_factor_length, max_knns)
 
     def _get_values(self):
-        # path = "checkpoints/neulab/gpt2-finetuned-wikitext103"
-        # vals_filename = "dstore_gpt2_116988150_768_vals.npy"
-        keys_vals_prefix = get_dstore_path(self.dstore_dir, model.config.model_type, self.dstore_size, self.dimension)
-        vals_filename = f'{keys_vals_prefix}_vals.npy'
         # self.dstore_size == 19254850
-        values = np.memmap(os.path.join(path, vals_filename), dtype=np.int32, mode="r", shape=(self.dstore_size, 1))
+        # path = "checkpoints/neulab/gpt2-finetuned-wikitext103"
+        vals_filename = "dstore_gpt2_116988150_768_vals.npy"
+        values = np.memmap(os.path.join(self.dstore_dir, vals_filename), dtype=np.int32, mode="r", shape=(self.dstore_size, 1))
         if self.truncate_dstore is not None:
             values = values[:self.truncate_dstore, :]
         return values.reshape(-1)
