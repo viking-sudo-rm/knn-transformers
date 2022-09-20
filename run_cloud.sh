@@ -1,6 +1,7 @@
 #!/usr/bin/sh
 MODEL=neulab/gpt2-finetuned-wikitext103
 DSTORE_DIR=cloud/input/checkpoints/${MODEL}
+CACHE_DIR=cloud/input/.cache
 OUTPUT_DIR=cloud/output/${MODEL}
 
 python3 -u run_clm.py \
@@ -10,8 +11,8 @@ python3 -u run_clm.py \
   --model_name_or_path ${MODEL} \
   --output_dir ${OUTPUT_DIR} \
   --dstore_dir=${DSTORE_DIR} \
-  --min_factor_length=2 \
-  --truncate_dstore=1000
+  --cache_path=${CACHE_DIR} \
+  --min_factor_length=2
 
 # For debugging, can add the following:
 # --truncate_dstore=1000

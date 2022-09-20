@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import defaultdict, deque
 
 from .retriever import Retriever
 
@@ -26,12 +26,12 @@ class RetrieverBuilder:
     def build_factor_lengths(dfa):
         """Find shortest path to each state by breadth-first search."""
         factor_lengths = {dfa.initial: 0}
-        queue = [dfa.initial]
+        queue = deque([dfa.initial])
         while queue:
-            state = queue.pop(0)
+            state = queue.popleft()
             length = factor_lengths[state]
             for token in dfa.edges_out[state]:
-                next_state, _ = dfa.next_state(state, token)
+                next_state, _ = dfa.transitions[state, token]
                 # We only care about the minimum-depth occurence of each state.
                 if next_state not in factor_lengths:
                     factor_lengths[next_state] = length + 1
