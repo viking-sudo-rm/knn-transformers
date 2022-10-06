@@ -25,7 +25,7 @@ import itertools
 import logging
 import math
 import os
-    
+
 import sys
 from dataclasses import dataclass, field
 from typing import Optional
@@ -239,9 +239,10 @@ class KNNArguments:
 
     ## New RetoMaton args:
     suffix_dfa: bool = field(default=False)
-    truncate_dstore: int = field(default=None)
+    truncate_dstore: int = field(default=-1)
     min_factor_length: int = field(default=2)
     cache_path: str = field(default=".cache")
+    retomaton: bool = field(default=False)
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
@@ -430,7 +431,7 @@ def main():
             k=knn_args.k, lmbda=knn_args.lmbda, knn_temp=knn_args.knn_temp, probe=knn_args.probe,
             no_pointer=knn_args.no_pointer, min_knns=knn_args.min_knns, max_knns=knn_args.max_knns,
             members=knn_args.members, truncate_dstore=knn_args.truncate_dstore, min_factor_length=knn_args.min_factor_length,
-            cache_path=knn_args.cache_path)
+            cache_path=knn_args.cache_path, retomaton=knn_args.retomaton)
     elif knn_args.retomaton or knn_args.cluster_dstore:
         knn_wrapper = RetomatonWrapper(dstore_size=knn_args.dstore_size, dstore_dir=knn_args.dstore_dir, 
             dimension=dimension, 

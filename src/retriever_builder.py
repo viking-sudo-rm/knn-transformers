@@ -14,12 +14,15 @@ class RetrieverBuilder:
 
     @staticmethod
     def build_inverse_failures(dfa):
+        if dfa.failures is None:
+            return {}
         inverse_failures = defaultdict(list)
         for state, fail_state in dfa.failures.items():
             if state is None or fail_state is None:
                 continue
             inverse_failures[fail_state].append(state)
-        inverse_failures[dfa.initial].remove(dfa.initial)
+        if dfa.initial in inverse_failures:
+            inverse_failures[dfa.initial].remove(dfa.initial)
         return inverse_failures
 
     @staticmethod

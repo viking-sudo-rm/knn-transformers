@@ -21,7 +21,8 @@ import faiss.contrib.torch_utils
 from faiss import IndexFlatL2
 import scipy.sparse as sp
 
-from src.suffix_automaton import SuffixAutomatonBuilder
+from src.suffix_dfa_builder import SuffixDfaBuilder
+from src.trie_builder import TrieBuilder
 from src.retriever import Retriever
 from src.retriever_builder import RetrieverBuilder
 from src.cache import Cache
@@ -37,31 +38,28 @@ def first_n(iterable, n):
 class _Metrics:
 
     def __init__(self,
-                 n_hits: int = 0,
                  n_total: int = 0,
                  n_pointers: int = 0,
-                 n_initial: int = 0,
+                 n_empty: int = 0,
+                 n_states: int = 0,
                 ):
-        self.n_hits = n_hits
         self.n_total = n_total
         self.n_pointers = n_pointers
-        self.n_initial = n_initial
+        self.n_empty = n_empty
+        self.n_states = n_states
 
-    def register(self) -> None:
+    def update(self, states, pointers) -> None:
         self.n_total += 1
-
-    def register_hit(self, pointers) -> None:
-        self.n_hits += 1
         self.n_pointers += len(pointers)
-    
-    def register_initial(self) -> None:
-        self.n_initial += 1
+        self.n_states += len(states)
+        if len(states) == 0:
+            self.n_empty += 1
     
     def get_metrics_dict(self) -> dict:
         return {
-            "hit_rate": self.n_hits / self.n_total,
-            "pointers_per_hit": self.n_pointers / self.n_hits,
-            "initial_rate": self.n_initial / self.n_total,
+            "n_states": self.n_pointers / self.n_total,
+            "n_pointers": self.n_pointers / self.n_total,
+            "n_empty": self.n_empty / self.n_total,
         }
 
 
@@ -71,9 +69,10 @@ class SuffixDfaWrapper(KNNWrapper):
                  min_knns: int = 1,
                  max_knns: int = 1024,
                  members=None,
-                 truncate_dstore: int = None,
+                 truncate_dstore: int = -1,
                  min_factor_length: int = 2,
                  cache_path: str = ".cache",
+                 retomaton: bool = False,
                  **kwargs):
         super().__init__(**kwargs)
         self.no_pointer = no_pointer
@@ -81,6 +80,7 @@ class SuffixDfaWrapper(KNNWrapper):
         self.max_knns = max_knns
         self.min_factor_length = min_factor_length
         self.truncate_dstore = truncate_dstore
+        self.retomaton = retomaton
 
         self.metrics = _Metrics()
 
@@ -107,7 +107,10 @@ class SuffixDfaWrapper(KNNWrapper):
         self.no_lookup_counter_history = []
 
         # Build or load the DFA and the retriever state.
-        cache_path = os.path.join(cache_path, str(self.truncate_dstore))
+        if not retomaton:
+            cache_path = os.path.join(cache_path, str(self.truncate_dstore))
+        else:
+            cache_path = os.path.join(cache_path, f"{self.truncate_dstore}-reto")
         logger.info(f"Using cache in {cache_path}")
         cache = Cache(cache_path, log_fn=logger.info)
         cache.register_tuple(("dfa", "solid_states"), self._build_suffix_automaton)
@@ -131,12 +134,16 @@ class SuffixDfaWrapper(KNNWrapper):
     def _build_suffix_automaton(self):
         """Build a suffix automaton over the data store, or load it if it is cached."""
         dstore = self._get_values()
-        logger.info("Creating suffix DFA from scratch...")
-        builder = SuffixAutomatonBuilder()
-        builder.build(dstore)
-        logger.info("Adding failure transitions...")
-        builder.add_failures()
-        logger.info("Suffix DFA built!")
+        if not self.retomaton:
+            builder = SuffixDfaBuilder()
+            builder.build(dstore)
+            logger.info("Adding failure transitions...")
+            builder.add_failures()
+            logger.info("Suffix DFA built!")
+        else:
+            builder = TrieBuilder()
+            builder.build(dstore)
+            logger.info("Linear DFA built!")
         return builder.dfa, builder.solid_states
 
     def post_forward_hook(self, module, input, output):
@@ -169,26 +176,21 @@ class SuffixDfaWrapper(KNNWrapper):
         # Need a list so that types are converted to Pythonic ones correctly.
         full_context = captured_labels.tolist()
         # TODO: A binary tree representation is possibly more efficient.
-        states = {self.dfa.initial}
+        states: set[int] = {self.dfa.initial}
 
         for idx, (timestep_query, label) in enumerate(zip_longest(queries, captured_labels)):
             perform_search = False
             extended_pointers = None
-            # Get pointers from suffix automaton instead of next token.
-            # context = full_context[:idx]
-            # pointers_gen = first_n(self.retriever.gen_pointers(context), self.max_factor_pointers)
             pointers_gen = self.retriever.gen_pointers(states)
-            # pointers = torch.tensor([p + 1 for p in pointers_gen], dtype=torch.long)
-            pointers = torch.tensor(list(pointers_gen))
+            pointers = torch.tensor(list(pointers_gen))  # In the range [0, n].
+            self.metrics.update(states, pointers)
 
-            self.metrics.register()
             if self.no_pointer or pointers.numel() < self.min_knns:
                 perform_search = True
                 self.no_lookup_counter_history.append(no_lookup_counter)
                 no_lookup_counter = 0
             else:
                 no_lookup_counter += 1
-                self.metrics.register_hit(pointers)
 
             if self.no_pointer:
                 extended_pointers = None
@@ -202,39 +204,32 @@ class SuffixDfaWrapper(KNNWrapper):
                 timestep_query, 
                 pointers=extended_pointers,
                 perform_search=perform_search)
-
             all_knn_probs.append(cur_knn_log_prob)
-            
+
             if not self.no_pointer and label is not None:
                 vals_are_correct_and_pointer_available = (vals_at_knns == label) & (knns < self.dstore_size - 1)
                 cur_knns = knns[vals_are_correct_and_pointer_available]
-                if vals_are_correct_and_pointer_available.shape == torch.Size([0]):
-                    cur_dists = dists[vals_are_correct_and_pointer_available]
-                else:
-                    cur_dists = torch.tensor([], dtype=torch.float32)
+                cur_dists = dists[vals_are_correct_and_pointer_available]
                 cur_knns = cur_knns[cur_dists.argsort(descending=True)]
 
                 # Get the state associated with each new pointer.
                 # TODO: Could also used fixed-length contexts here.
-                if self.truncate_dstore is None:
-                    states.update(self.solid_states[ptr] for ptr in cur_knns)
-                else:
-                    # In this case it would make sense to feed the strings through the DFA.
-                    states.update(self.solid_states[ptr] for ptr in cur_knns[cur_knns < self.truncate_dstore])
+                if self.truncate_dstore > -1:
+                    cur_knns = cur_knns[cur_knns < self.truncate_dstore]
+                states.update(self.solid_states[ptr] for ptr in cur_knns)
 
-            # TODO: In practice, will we need to limit the max number of states? Probably not.
+                # TODO: In practice, will we need to limit the max number of states? Probably not.
 
             # Update the state pointers by following suffix automaton transitions.
-            token = label.item()
+            token = label.item()  # In the DFA, the token is an np.int32, but the type conversion should work out.
             queue = list(states)
             for state in queue:
                 states.remove(state)
             for state in queue:
                 next_state, _ = self.dfa.next_state(state, token)
-                states.add(next_state)
-            
-            if len(states) == 1 and self.dfa.initial in states:
-                self.metrics.register_initial()
+                # Handle the case where the DFA does not have failure transitions.
+                if next_state is not None:
+                    states.add(next_state)
 
         interpolated_scores = KNNWrapper.interpolate(torch.stack(all_knn_probs), lm_logits, self.lmbda) # (nonpad, vocab)
         output[nonpad_mask] = interpolated_scores
