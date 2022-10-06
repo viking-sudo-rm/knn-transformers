@@ -46,4 +46,5 @@ class Retriever:
           self.retrieved[ptr] = self.n_retrievals
           yield ptr
 
-      queue.extend(self.inverse_failures[q])
+      if q in self.inverse_failures:
+        queue.extend(self.inverse_failures[q])

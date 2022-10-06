@@ -21,7 +21,8 @@ import faiss.contrib.torch_utils
 from faiss import IndexFlatL2
 import scipy.sparse as sp
 
-from src.suffix_automaton import SuffixAutomatonBuilder
+from src.suffix_dfa_builder import SuffixDfaBuilder
+from src.trie_builder import TrieBuilder
 from src.retriever import Retriever
 from src.retriever_builder import RetrieverBuilder
 from src.cache import Cache
@@ -68,9 +69,10 @@ class SuffixDfaWrapper(KNNWrapper):
                  min_knns: int = 1,
                  max_knns: int = 1024,
                  members=None,
-                 truncate_dstore: int = None,
+                 truncate_dstore: int = -1,
                  min_factor_length: int = 2,
                  cache_path: str = ".cache",
+                 retomaton: bool = False,
                  **kwargs):
         super().__init__(**kwargs)
         self.no_pointer = no_pointer
@@ -78,6 +80,7 @@ class SuffixDfaWrapper(KNNWrapper):
         self.max_knns = max_knns
         self.min_factor_length = min_factor_length
         self.truncate_dstore = truncate_dstore
+        self.retomaton = retomaton
 
         self.metrics = _Metrics()
 
@@ -104,7 +107,10 @@ class SuffixDfaWrapper(KNNWrapper):
         self.no_lookup_counter_history = []
 
         # Build or load the DFA and the retriever state.
-        cache_path = os.path.join(cache_path, str(self.truncate_dstore))
+        if not retomaton:
+            cache_path = os.path.join(cache_path, str(self.truncate_dstore))
+        else:
+            cache_path = os.path.join(cache_path, f"{self.truncate_dstore}-reto")
         logger.info(f"Using cache in {cache_path}")
         cache = Cache(cache_path, log_fn=logger.info)
         cache.register_tuple(("dfa", "solid_states"), self._build_suffix_automaton)
@@ -128,12 +134,16 @@ class SuffixDfaWrapper(KNNWrapper):
     def _build_suffix_automaton(self):
         """Build a suffix automaton over the data store, or load it if it is cached."""
         dstore = self._get_values()
-        logger.info("Creating suffix DFA from scratch...")
-        builder = SuffixAutomatonBuilder()
-        builder.build(dstore)
-        logger.info("Adding failure transitions...")
-        builder.add_failures()
-        logger.info("Suffix DFA built!")
+        if not self.retomaton:
+            builder = SuffixDfaBuilder()
+            builder.build(dstore)
+            logger.info("Adding failure transitions...")
+            builder.add_failures()
+            logger.info("Suffix DFA built!")
+        else:
+            builder = TrieBuilder()
+            builder.build(dstore)
+            logger.info("Linear DFA built!")
         return builder.dfa, builder.solid_states
 
     def post_forward_hook(self, module, input, output):
@@ -171,13 +181,8 @@ class SuffixDfaWrapper(KNNWrapper):
         for idx, (timestep_query, label) in enumerate(zip_longest(queries, captured_labels)):
             perform_search = False
             extended_pointers = None
-            # Get pointers from suffix automaton instead of next token.
-            # context = full_context[:idx]
             pointers_gen = self.retriever.gen_pointers(states)
-            pointers = torch.tensor(list(pointers_gen))
-            # pointers = torch.tensor([p + 1 for p in pointers_gen], dtype=torch.long)
-
-            # Update all the custom metrics.
+            pointers = torch.tensor(list(pointers_gen))  # In the range [0, n].
             self.metrics.update(states, pointers)
 
             if self.no_pointer or pointers.numel() < self.min_knns:
@@ -199,33 +204,32 @@ class SuffixDfaWrapper(KNNWrapper):
                 timestep_query, 
                 pointers=extended_pointers,
                 perform_search=perform_search)
-
             all_knn_probs.append(cur_knn_log_prob)
 
             if not self.no_pointer and label is not None:
                 vals_are_correct_and_pointer_available = (vals_at_knns == label) & (knns < self.dstore_size - 1)
-                # There was a bug here preventing cur_knns to be populated.
                 cur_knns = knns[vals_are_correct_and_pointer_available]
                 cur_dists = dists[vals_are_correct_and_pointer_available]
                 cur_knns = cur_knns[cur_dists.argsort(descending=True)]
 
                 # Get the state associated with each new pointer.
                 # TODO: Could also used fixed-length contexts here.
-                if self.truncate_dstore is not None:
+                if self.truncate_dstore > -1:
                     cur_knns = cur_knns[cur_knns < self.truncate_dstore]
                 states.update(self.solid_states[ptr] for ptr in cur_knns)
 
-                # TODO: Add all states on failure path greater than retrieval size?
                 # TODO: In practice, will we need to limit the max number of states? Probably not.
 
             # Update the state pointers by following suffix automaton transitions.
-            token = label.item()
+            token = label.item()  # In the DFA, the token is an np.int32, but the type conversion should work out.
             queue = list(states)
             for state in queue:
                 states.remove(state)
             for state in queue:
                 next_state, _ = self.dfa.next_state(state, token)
-                states.add(next_state)
+                # Handle the case where the DFA does not have failure transitions.
+                if next_state is not None:
+                    states.add(next_state)
 
         interpolated_scores = KNNWrapper.interpolate(torch.stack(all_knn_probs), lm_logits, self.lmbda) # (nonpad, vocab)
         output[nonpad_mask] = interpolated_scores

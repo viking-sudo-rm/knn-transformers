@@ -6,7 +6,7 @@ from .wfa import WFA
 from .semiring import PointerSemiring
 
 
-class SuffixAutomatonBuilder:
+class SuffixDfaBuilder:
 
   """Build the suffix automaton for each string.
 
@@ -15,7 +15,7 @@ class SuffixAutomatonBuilder:
   Operations can be chained. For example:
 
   ```python
-  dfa = SuffixAutomatonBuilder().build("abbb").add_failures().dfa
+  dfa = SuffixDfaBuilder().build("abbb").add_failures().dfa
   ```
   """
 
@@ -39,7 +39,7 @@ class SuffixAutomatonBuilder:
     self.dfa, self.solid_states = state
 
   def build(self, string: str):
-    initial = self.dfa.new_state(list(range(-1, len(string))))
+    initial = self.dfa.new_state(list(range(0, len(string) + 1)))
     self.L[initial] = 0
     self.F[initial] = None
     self.last = initial
@@ -50,7 +50,7 @@ class SuffixAutomatonBuilder:
     return self
 
   def extend(self, ptr, token):
-    new = self.dfa.new_state([ptr])
+    new = self.dfa.new_state([ptr + 1])
     self.L[new] = self.L[self.last] + 1
     state = self.last
     self.solid_states.append(new)
@@ -78,7 +78,9 @@ class SuffixAutomatonBuilder:
         # weight = self.dfa.weights[state]
         # weight = [x + 1 for x in weight]
         # weight = [ptr + 1]
-        weight = self.dfa.weights[next_state] + [ptr]
+        # weight = self.dfa.weights[next_state] + [ptr + 1]
+        weight = deepcopy(self.dfa.weights[next_state])
+        weight.append(ptr + 1)
         clone = self.dfa.new_state(weight)
         self.L[clone] = self.L[state] + 1
         for s in self.dfa.edges_out[next_state]:
