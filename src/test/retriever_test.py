@@ -12,7 +12,7 @@ class RetrieverTest(unittest.TestCase):
     builder = SuffixDfaBuilder().build("abcab").add_failures()
     retriever = RetrieverBuilder.build(builder.dfa)
     state, _ = builder.dfa.transition("ab")
-    pointers = list(retriever.gen_pointers([state]))
+    pointers = [ptr for ptr, _ in retriever.gen_pointers([state])]
     self.assertEqual(pointers, [2, 5])
 
   def test_retrieve_da_from_abcab(self):
@@ -20,7 +20,7 @@ class RetrieverTest(unittest.TestCase):
     builder = SuffixDfaBuilder().build("abcab").add_failures()
     retriever = RetrieverBuilder.build(builder.dfa)
     state, _ = builder.dfa.transition("da")
-    pointers = list(retriever.gen_pointers([state]))
+    pointers = [ptr for ptr, _ in retriever.gen_pointers([state])]
     self.assertEqual(pointers, [1, 4])
 
   def test_retrieve_cb_from_abcab(self):
@@ -28,7 +28,7 @@ class RetrieverTest(unittest.TestCase):
     builder = SuffixDfaBuilder().build("abcab").add_failures()
     retriever = RetrieverBuilder.build(builder.dfa)
     state, _ = builder.dfa.transition("cb")
-    pointers = list(retriever.gen_pointers([state]))
+    pointers = [ptr for ptr, _ in retriever.gen_pointers([state])]
     self.assertEqual(pointers, [2, 5])
 
   def test_retrieve_empty_string(self):
@@ -36,7 +36,7 @@ class RetrieverTest(unittest.TestCase):
     builder = SuffixDfaBuilder().build("abcab").add_failures()
     retriever = RetrieverBuilder.build(builder.dfa)
     state, _ = builder.dfa.transition("d")
-    pointers = list(retriever.gen_pointers([state]))
+    pointers = [ptr for ptr, _ in retriever.gen_pointers([state])]
     result = list(range(0, 6))
     self.assertEqual(pointers, result)
 
@@ -49,7 +49,7 @@ class RetrieverTest(unittest.TestCase):
     builder = SuffixDfaBuilder().build(string).add_failures()
     state, _ = builder.dfa.transition(factor)
     retriever = RetrieverBuilder.build(builder.dfa)
-    pointers = list(retriever.gen_pointers([state]))
+    pointers = [ptr for ptr, _ in retriever.gen_pointers([state])]
     strings = [string[:ptr] for ptr in pointers]
     self.assertListEqual(strings, ["cab", "cabab"])
 
@@ -59,6 +59,6 @@ class RetrieverTest(unittest.TestCase):
     builder = SuffixDfaBuilder().build(string).add_failures()
     state, _ = builder.dfa.transition(factor)
     retriever = RetrieverBuilder.build(builder.dfa)
-    pointers = list(retriever.gen_pointers([state]))
+    pointers = [ptr for ptr, _ in retriever.gen_pointers([state])]
     strings = [string[:ptr] for ptr in pointers]
     self.assertListEqual(strings, ["dcba", "dcbacba", "dcbacbaba"])

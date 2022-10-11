@@ -19,3 +19,5 @@ class TrieBuilderTest(unittest.TestCase):
             (3, "b"): (4, None),
         }
         )
+
+        self.assertListEqual(builder.solid_states, [0, 1, 2, 3, 4])

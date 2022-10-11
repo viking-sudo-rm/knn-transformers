@@ -26,13 +26,10 @@ from src.trie_builder import TrieBuilder
 from src.retriever import Retriever
 from src.retriever_builder import RetrieverBuilder
 from src.cache import Cache
+from src.state_manager import StateManager
 
 logger = logging.getLogger(__name__)
 logger.setLevel(20)
-
-
-def first_n(iterable, n):
-    return islice(iterable, 0, n)
 
 
 class _Metrics:
@@ -48,11 +45,11 @@ class _Metrics:
         self.n_empty = n_empty
         self.n_states = n_states
 
-    def update(self, states, pointers) -> None:
+    def update(self, sm, pointers) -> None:
         self.n_total += 1
         self.n_pointers += len(pointers)
-        self.n_states += len(states)
-        if len(states) == 0:
+        self.n_states += len(sm.states)
+        if len(sm.states) == 0:
             self.n_empty += 1
     
     def get_metrics_dict(self) -> dict:
@@ -72,7 +69,8 @@ class SuffixDfaWrapper(KNNWrapper):
                  truncate_dstore: int = -1,
                  min_factor_length: int = 2,
                  cache_path: str = ".cache",
-                 retomaton: bool = False,
+                 linear_dfa: bool = False,
+                 solid_only: bool = False,
                  **kwargs):
         super().__init__(**kwargs)
         self.no_pointer = no_pointer
@@ -80,8 +78,9 @@ class SuffixDfaWrapper(KNNWrapper):
         self.max_knns = max_knns
         self.min_factor_length = min_factor_length
         self.truncate_dstore = truncate_dstore
-        self.retomaton = retomaton
-
+        self.cache_path = cache_path
+        self.linear_dfa = linear_dfa
+        self.solid_only = solid_only
         self.metrics = _Metrics()
 
         if members is None:
@@ -106,35 +105,38 @@ class SuffixDfaWrapper(KNNWrapper):
         self.generate_cur_dists = torch.tensor([], dtype=torch.float32)
         self.no_lookup_counter_history = []
 
-        # Build or load the DFA and the retriever state.
-        if not retomaton:
-            cache_path = os.path.join(cache_path, str(self.truncate_dstore))
+    def break_into(self, model):
+        super().break_into(model)
+
+        if not self.linear_dfa:
+            cache_path = os.path.join(self.cache_path, str(self.truncate_dstore))
         else:
-            cache_path = os.path.join(cache_path, f"{self.truncate_dstore}-reto")
+            cache_path = os.path.join(self.cache_path, f"{self.truncate_dstore}-reto")
         logger.info(f"Using cache in {cache_path}")
         cache = Cache(cache_path, log_fn=logger.info)
         cache.register_tuple(("dfa", "solid_states"), self._build_suffix_automaton)
         self.dfa = cache.get("dfa")
         self.solid_states = cache.get("solid_states")
+
+        logger.info(f"# states: {len(self.dfa.weights)}")
+        logger.info(f"# trans: {len(self.dfa.transitions)}")
+        logger.info(f"# solid: {len(self.solid_states)}")
+        logger.info(f"# fails: {len(self.dfa.failures)}")
+
         cache.register("inverse_failures", lambda: RetrieverBuilder.build_inverse_failures(self.dfa))
         cache.register("factor_lengths", lambda: RetrieverBuilder.build_factor_lengths(self.dfa))
         inverse_failures = cache.get("inverse_failures")
-        factor_lengths = None if min_factor_length == 0 else cache.get("factor_lengths")
-        self.retriever = Retriever(self.dfa, inverse_failures, factor_lengths, min_factor_length, max_knns)
-
-    def _get_values(self):
-        # self.dstore_size == 19254850
-        # path = "checkpoints/neulab/gpt2-finetuned-wikitext103"
-        vals_filename = "dstore_gpt2_116988150_768_vals.npy"
-        values = np.memmap(os.path.join(self.dstore_dir, vals_filename), dtype=np.int32, mode="r", shape=(self.dstore_size, 1))
-        if self.truncate_dstore is not None:
-            values = values[:self.truncate_dstore, :]
-        return values.reshape(-1)
+        factor_lengths = None if self.min_factor_length == 0 else cache.get("factor_lengths")
+        # TODO: Can add back max_pointers=self.max_knns here.
+        self.retriever = Retriever(self.dfa, inverse_failures, factor_lengths, self.min_factor_length, max_pointers=None)
 
     def _build_suffix_automaton(self):
         """Build a suffix automaton over the data store, or load it if it is cached."""
-        dstore = self._get_values()
-        if not self.retomaton:
+        dstore = self.vals.reshape(-1)
+        if self.truncate_dstore > -1:
+            dstore = np.copy(dstore[:self.truncate_dstore])
+
+        if not self.linear_dfa:
             builder = SuffixDfaBuilder()
             builder.build(dstore)
             logger.info("Adding failure transitions...")
@@ -173,19 +175,16 @@ class SuffixDfaWrapper(KNNWrapper):
         cur_dists = torch.tensor([], dtype=torch.float32)
         no_lookup_counter = 0
 
-        # Need a list so that types are converted to Pythonic ones correctly.
-        full_context = captured_labels.tolist()
-        # TODO: A binary tree representation is possibly more efficient.
-        states: set[int] = {self.dfa.initial}
+        sm = StateManager(self.solid_states, self.retriever, solid_only=self.solid_only)
 
         for idx, (timestep_query, label) in enumerate(zip_longest(queries, captured_labels)):
             perform_search = False
             extended_pointers = None
-            pointers_gen = self.retriever.gen_pointers(states)
-            pointers = torch.tensor(list(pointers_gen))  # In the range [0, n].
-            self.metrics.update(states, pointers)
+            pointers = torch.tensor(sm.get_pointers())
+            self.metrics.update(sm, pointers)
 
             if self.no_pointer or pointers.numel() < self.min_knns:
+                # FIXME: numel() here is different.
                 perform_search = True
                 self.no_lookup_counter_history.append(no_lookup_counter)
                 no_lookup_counter = 0
@@ -211,25 +210,15 @@ class SuffixDfaWrapper(KNNWrapper):
                 cur_knns = knns[vals_are_correct_and_pointer_available]
                 cur_dists = dists[vals_are_correct_and_pointer_available]
                 cur_knns = cur_knns[cur_dists.argsort(descending=True)]
-
-                # Get the state associated with each new pointer.
-                # TODO: Could also used fixed-length contexts here.
                 if self.truncate_dstore > -1:
                     cur_knns = cur_knns[cur_knns < self.truncate_dstore]
-                states.update(self.solid_states[ptr] for ptr in cur_knns)
-
-                # TODO: In practice, will we need to limit the max number of states? Probably not.
+                # Is there potentially a type mismatch here?
+                sm.add_pointers(cur_knns)
 
             # Update the state pointers by following suffix automaton transitions.
-            token = label.item()  # In the DFA, the token is an np.int32, but the type conversion should work out.
-            queue = list(states)
-            for state in queue:
-                states.remove(state)
-            for state in queue:
-                next_state, _ = self.dfa.next_state(state, token)
-                # Handle the case where the DFA does not have failure transitions.
-                if next_state is not None:
-                    states.add(next_state)
+            # In the DFA, the token is an np.int32, but the type conversion should work out.
+            sm.transition(token=label.item())
+            # TODO: Limit the max number of states?
 
         interpolated_scores = KNNWrapper.interpolate(torch.stack(all_knn_probs), lm_logits, self.lmbda) # (nonpad, vocab)
         output[nonpad_mask] = interpolated_scores

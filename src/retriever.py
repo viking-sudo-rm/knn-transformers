@@ -44,7 +44,7 @@ class Retriever:
       for ptr in pointers:
         if self.retrieved[ptr] != self.n_retrievals:
           self.retrieved[ptr] = self.n_retrievals
-          yield ptr
+          yield ptr, q
 
       if q in self.inverse_failures:
         queue.extend(self.inverse_failures[q])

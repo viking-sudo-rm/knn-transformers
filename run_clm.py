@@ -237,12 +237,13 @@ class KNNArguments:
     sample_size: int = field(default=20000000)
     members: str = field(default=None)
 
-    ## New RetoMaton args:
+    ## Suffix DFA args:
     suffix_dfa: bool = field(default=False)
     truncate_dstore: int = field(default=-1)
     min_factor_length: int = field(default=2)
     cache_path: str = field(default=".cache")
-    retomaton: bool = field(default=False)
+    linear_dfa: bool = field(default=False)
+    solid_only: bool = field(default=False)
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
@@ -431,7 +432,7 @@ def main():
             k=knn_args.k, lmbda=knn_args.lmbda, knn_temp=knn_args.knn_temp, probe=knn_args.probe,
             no_pointer=knn_args.no_pointer, min_knns=knn_args.min_knns, max_knns=knn_args.max_knns,
             members=knn_args.members, truncate_dstore=knn_args.truncate_dstore, min_factor_length=knn_args.min_factor_length,
-            cache_path=knn_args.cache_path, retomaton=knn_args.retomaton)
+            cache_path=knn_args.cache_path, linear_dfa=knn_args.linear_dfa, solid_only=knn_args.solid_only)
     elif knn_args.retomaton or knn_args.cluster_dstore:
         knn_wrapper = RetomatonWrapper(dstore_size=knn_args.dstore_size, dstore_dir=knn_args.dstore_dir, 
             dimension=dimension, 
