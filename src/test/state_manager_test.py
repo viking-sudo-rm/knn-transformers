@@ -51,3 +51,8 @@ class StateManagerTest(TestCase):
         manager = StateManager(solid_states, retriever, {1, 2}, solid_only=True)
         pointers = manager.get_pointers()
         self.assertListEqual(pointers, [1])
+
+    def test_add_pointers_with_limit(self):
+        manager = StateManager(solid_states, retriever, {1}, max_states=2)
+        manager.add_pointers([0, 1])
+        self.assertSetEqual(manager.states, {0, 1})

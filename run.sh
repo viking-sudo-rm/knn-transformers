@@ -2,7 +2,7 @@
 MODEL=neulab/gpt2-finetuned-wikitext103
 # TRUNCATE=1000
 TRUNCATE=-1
-RETO=False
+CHAIN=True
 
 python3 -u run_clm.py \
   --suffix_dfa \
@@ -13,6 +13,5 @@ python3 -u run_clm.py \
   --dstore_dir checkpoints/${MODEL} \
   --min_factor_length=2 \
   --truncate_dstore=${TRUNCATE} \
-  --retomaton=${RETO} \
-  --min_knns=10000 \
-  --solid_only
+  --linear_dfa=${CHAIN} \
+  --min_knns=10000

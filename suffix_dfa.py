@@ -71,6 +71,7 @@ class SuffixDfaWrapper(KNNWrapper):
                  cache_path: str = ".cache",
                  linear_dfa: bool = False,
                  solid_only: bool = False,
+                 max_states: int = 1024,
                  **kwargs):
         super().__init__(**kwargs)
         self.no_pointer = no_pointer
@@ -81,6 +82,7 @@ class SuffixDfaWrapper(KNNWrapper):
         self.cache_path = cache_path
         self.linear_dfa = linear_dfa
         self.solid_only = solid_only
+        self.max_states = max_states
         self.metrics = _Metrics()
 
         if members is None:
@@ -127,7 +129,6 @@ class SuffixDfaWrapper(KNNWrapper):
         cache.register("factor_lengths", lambda: RetrieverBuilder.build_factor_lengths(self.dfa))
         inverse_failures = cache.get("inverse_failures")
         factor_lengths = None if self.min_factor_length == 0 else cache.get("factor_lengths")
-        # TODO: Can add back max_pointers=self.max_knns here.
         self.retriever = Retriever(self.dfa, inverse_failures, factor_lengths, self.min_factor_length, max_pointers=None)
 
     def _build_suffix_automaton(self):
@@ -175,33 +176,27 @@ class SuffixDfaWrapper(KNNWrapper):
         cur_dists = torch.tensor([], dtype=torch.float32)
         no_lookup_counter = 0
 
-        sm = StateManager(self.solid_states, self.retriever, solid_only=self.solid_only)
+        sm = StateManager(self.solid_states,
+                          self.retriever,
+                          solid_only=self.solid_only,
+                          max_states=self.max_states)
 
         for idx, (timestep_query, label) in enumerate(zip_longest(queries, captured_labels)):
             perform_search = False
-            extended_pointers = None
             pointers = torch.tensor(sm.get_pointers())
             self.metrics.update(sm, pointers)
 
             if self.no_pointer or pointers.numel() < self.min_knns:
-                # FIXME: numel() here is different.
                 perform_search = True
                 self.no_lookup_counter_history.append(no_lookup_counter)
                 no_lookup_counter = 0
             else:
                 no_lookup_counter += 1
-
-            if self.no_pointer:
-                extended_pointers = None
-            elif pointers.numel() >= self.max_knns:
-                extended_pointers = pointers[:self.max_knns]
-            else:
-                extended_pointers = self.extend_pointers_using_clusters(pointers)
             
             # (vocab_size, ) , (k, ), (k, ), (k, )
             cur_knn_log_prob, knns, dists, vals_at_knns = self.get_knn_log_prob(
                 timestep_query, 
-                pointers=extended_pointers,
+                pointers=pointers,
                 perform_search=perform_search)
             all_knn_probs.append(cur_knn_log_prob)
 
@@ -212,13 +207,10 @@ class SuffixDfaWrapper(KNNWrapper):
                 cur_knns = cur_knns[cur_dists.argsort(descending=True)]
                 if self.truncate_dstore > -1:
                     cur_knns = cur_knns[cur_knns < self.truncate_dstore]
-                # Is there potentially a type mismatch here?
                 sm.add_pointers(cur_knns)
 
-            # Update the state pointers by following suffix automaton transitions.
             # In the DFA, the token is an np.int32, but the type conversion should work out.
             sm.transition(token=label.item())
-            # TODO: Limit the max number of states?
 
         interpolated_scores = KNNWrapper.interpolate(torch.stack(all_knn_probs), lm_logits, self.lmbda) # (nonpad, vocab)
         output[nonpad_mask] = interpolated_scores

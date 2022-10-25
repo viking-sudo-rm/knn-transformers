@@ -18,12 +18,14 @@ class StateManager:
                  retriever: Retriever,
                  states: set[int] = None,
                  solid_only: bool = False,
+                 max_states: int = -1,
                 ):
         self.dfa: WFA = retriever.dfa
         self.solid_states = solid_states
         self.retriever = retriever
         self.states = states or set([self.dfa.initial])
         self.solid_only = solid_only
+        self.max_states = max_states
 
     def transition(self, token) -> None:
         queue = list(self.states)
@@ -41,5 +43,16 @@ class StateManager:
         else:
             return [ptr for ptr, state in self.retriever.gen_pointers(self.states) if self.solid_states[ptr] == state]
 
-    def add_pointers(self, pointers):
-        self.states.update(self.solid_states[ptr] for ptr in pointers)
+    def add_pointers(self, pointers) -> None:
+        """Add pointers from a list to the state manager.
+        
+        Assumes pointers are sorted by priority."""
+        if self.max_states == -1:
+            self.states.update(self.solid_states[ptr] for ptr in pointers)
+            return
+
+        for ptr in pointers:
+            if len(self.states) >= self.max_states:
+                break
+            state = self.solid_states[ptr]
+            self.states.add(state)
