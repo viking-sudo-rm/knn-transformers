@@ -37,11 +37,6 @@ class StateManagerTest(TestCase):
         manager.transition("b")
         self.assertSetEqual(manager.states, {0})
 
-    def test_add_pointers(self):
-        manager = StateManager(solid_states, retriever)
-        manager.add_pointers(torch.tensor([1]))
-        self.assertSetEqual(manager.states, set([0, 2]))
-
     def test_get_pointers(self):
         manager = StateManager(solid_states, retriever, {0, 1, 2})
         pointers = manager.get_pointers()
@@ -52,7 +47,22 @@ class StateManagerTest(TestCase):
         pointers = manager.get_pointers()
         self.assertListEqual(pointers, [1])
 
-    def test_add_pointers_with_limit(self):
-        manager = StateManager(solid_states, retriever, {1}, max_states=2)
+    def test_add_pointers_no_clear(self):
+        manager = StateManager(solid_states, retriever, clear=False)
+        manager.add_pointers(torch.tensor([1]))
+        self.assertSetEqual(manager.states, set([0, 2]))
+
+    def test_add_pointers_with_limit_no_clear(self):
+        manager = StateManager(solid_states, retriever, {1}, max_states=2, clear=False)
         manager.add_pointers([0, 1])
         self.assertSetEqual(manager.states, {0, 1})
+
+    def test_add_pointers_no_limit(self):
+        manager = StateManager(solid_states, retriever, {1})
+        manager.add_pointers([0, 1])
+        self.assertSetEqual(manager.states, {0, 2})
+
+    def test_add_pointers(self):
+        manager = StateManager(solid_states, retriever, {1}, max_states=1)
+        manager.add_pointers([0, 1])
+        self.assertSetEqual(manager.states, {0})

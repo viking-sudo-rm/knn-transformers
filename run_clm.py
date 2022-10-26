@@ -241,6 +241,7 @@ class KNNArguments:
     suffix_dfa: bool = field(default=False)
     truncate_dstore: int = field(default=-1)
     min_factor_length: int = field(default=2)
+    add_initial: bool = field(default=True)
     cache_path: str = field(default=".cache")
     linear_dfa: bool = field(default=False)
     solid_only: bool = field(default=False)
@@ -432,7 +433,7 @@ def main():
             recompute_dists=knn_args.recompute_dists,
             k=knn_args.k, lmbda=knn_args.lmbda, knn_temp=knn_args.knn_temp, probe=knn_args.probe,
             no_pointer=knn_args.no_pointer, min_knns=knn_args.min_knns, max_knns=knn_args.max_knns,
-            members=knn_args.members, truncate_dstore=knn_args.truncate_dstore, min_factor_length=knn_args.min_factor_length,
+            members=knn_args.members, truncate_dstore=knn_args.truncate_dstore, min_factor_length=knn_args.min_factor_length, add_initial=knn_args.add_initial,
             cache_path=knn_args.cache_path, linear_dfa=knn_args.linear_dfa, solid_only=knn_args.solid_only, max_states=knn_args.max_states)
     elif knn_args.retomaton or knn_args.cluster_dstore:
         knn_wrapper = RetomatonWrapper(dstore_size=knn_args.dstore_size, dstore_dir=knn_args.dstore_dir, 

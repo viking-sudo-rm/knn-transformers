@@ -68,6 +68,7 @@ class SuffixDfaWrapper(KNNWrapper):
                  members=None,
                  truncate_dstore: int = -1,
                  min_factor_length: int = 2,
+                 add_initial: bool = True,
                  cache_path: str = ".cache",
                  linear_dfa: bool = False,
                  solid_only: bool = False,
@@ -78,6 +79,7 @@ class SuffixDfaWrapper(KNNWrapper):
         self.min_knns = min_knns
         self.max_knns = max_knns
         self.min_factor_length = min_factor_length
+        self.add_initial = add_initial
         self.truncate_dstore = truncate_dstore
         self.cache_path = cache_path
         self.linear_dfa = linear_dfa
@@ -179,7 +181,8 @@ class SuffixDfaWrapper(KNNWrapper):
         sm = StateManager(self.solid_states,
                           self.retriever,
                           solid_only=self.solid_only,
-                          max_states=self.max_states)
+                          max_states=self.max_states,
+                          add_initial=self.add_initial)
 
         for idx, (timestep_query, label) in enumerate(zip_longest(queries, captured_labels)):
             perform_search = False
@@ -207,6 +210,7 @@ class SuffixDfaWrapper(KNNWrapper):
                 cur_knns = cur_knns[cur_dists.argsort(descending=True)]
                 if self.truncate_dstore > -1:
                     cur_knns = cur_knns[cur_knns < self.truncate_dstore]
+                # FIXME: This should remove active states.
                 sm.add_pointers(cur_knns)
 
             # In the DFA, the token is an np.int32, but the type conversion should work out.

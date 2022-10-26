@@ -10,8 +10,10 @@ class StateManager:
     Args:
         solid_states: A mapping from pointers to states.
         retriever: An object for retrieving pointers from states.
+
+    TODO:
+        Replace states with a list instead of set? We might want to upweight states occuring more than once.
     """
-    # TODO: A binary tree representation is possibly more efficient.
 
     def __init__(self,
                  solid_states: list[int],
@@ -19,13 +21,22 @@ class StateManager:
                  states: set[int] = None,
                  solid_only: bool = False,
                  max_states: int = -1,
+                 clear: bool = True,
+                 add_initial: bool = True,
                 ):
         self.dfa: WFA = retriever.dfa
         self.solid_states = solid_states
         self.retriever = retriever
-        self.states = states or set([self.dfa.initial])
         self.solid_only = solid_only
         self.max_states = max_states
+        self.clear = clear
+
+        if states:
+            self.states = states
+        elif add_initial:
+            self.states = set([self.dfa.initial])
+        else:
+            self.states = set()
 
     def transition(self, token) -> None:
         queue = list(self.states)
@@ -47,6 +58,9 @@ class StateManager:
         """Add pointers from a list to the state manager.
         
         Assumes pointers are sorted by priority."""
+        if self.clear:
+            self.states.clear()
+
         if self.max_states == -1:
             self.states.update(self.solid_states[ptr] for ptr in pointers)
             return
