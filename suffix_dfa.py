@@ -133,11 +133,12 @@ class SuffixDfaWrapper(KNNWrapper):
         factor_lengths = None if self.min_factor_length == 0 else cache.get("factor_lengths")
         self.retriever = Retriever(self.dfa, inverse_failures, factor_lengths, self.min_factor_length, max_pointers=None)
 
+    @torch.no_grad()
     def _build_suffix_automaton(self):
         """Build a suffix automaton over the data store, or load it if it is cached."""
         dstore = self.vals.reshape(-1)
         if self.truncate_dstore > -1:
-            dstore = np.copy(dstore[:self.truncate_dstore])
+            dstore = dstore[:self.truncate_dstore].clone()
 
         if not self.linear_dfa:
             builder = SuffixDfaBuilder()

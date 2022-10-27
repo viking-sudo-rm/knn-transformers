@@ -1,3 +1,5 @@
+import torch
+
 from .wfa import WFA
 from .semiring import PointerSemiring
 
@@ -24,6 +26,8 @@ class TrieBuilder:
     """
     last_state = self.initial
     for idx, token in enumerate(tokens):
+      if isinstance(token, torch.Tensor):
+        token = token.item()
       state, _ = self.dfa.next_state(last_state, token)
       if state is None:
         state = self.dfa.new_state([idx + 1])

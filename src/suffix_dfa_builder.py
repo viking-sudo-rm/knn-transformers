@@ -1,6 +1,7 @@
 """Build the suffix automaton for a string."""
 
 from copy import deepcopy
+import torch
 
 from .wfa import WFA
 from .semiring import PointerSemiring
@@ -46,6 +47,8 @@ class SuffixDfaBuilder:
     self.solid_states.append(initial)
 
     for ptr, token in enumerate(string):
+      if isinstance(token, torch.Tensor):
+        token = token.item()
       self.extend(ptr, token)
     return self
 

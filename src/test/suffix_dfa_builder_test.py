@@ -1,5 +1,6 @@
 import unittest
 import numpy as np
+import torch
 
 from src.suffix_dfa_builder import SuffixDfaBuilder
 
@@ -45,3 +46,11 @@ class SuffixDfaBuilderTest(unittest.TestCase):
     builder.build(string)
     builder.add_failures()
     self.assertListEqual(builder.dfa.forward("ab"), [3, 5])
+
+  def test_build_on_tensor(self):
+    """In practice we will pass in an array of ints."""
+    string = torch.tensor([0, 1, 2])
+    builder = SuffixDfaBuilder()
+    builder.build(string)
+    for _, token in builder.dfa.transitions.keys():
+      self.assertIsInstance(token, int)
