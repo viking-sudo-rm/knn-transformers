@@ -24,20 +24,20 @@ class SuffixDfaBuilder:
   Operations can be chained. For example:
 
   ```python
-  dfa = SuffixDfaBuilder().build("abbb").add_failures().dfa
+  dfa = SuffixDfaBuilder().build("abbb").dfa
   ```
   """
 
   def __init__(self):
     self.dfa = WFA(PointerSemiring(), failures=True)
-    # TODO: Could represent insolid states here: more memory efficient.
-    # TODO: Instead, could do a binary array of size n.
-    self.solid_states = []
 
     self.L = []
     self.F = self.dfa.failures
     self.initial = None
     self.last = None
+
+    self.dfa.solid_states = []
+    self.solid_states = self.dfa.solid_states
 
   def build(self, string: str):
     self.dfa.use_failures(False)
@@ -64,8 +64,7 @@ class SuffixDfaBuilder:
     # Re-enable failures and quit.
     self.dfa.failures[self.initial] = self.initial
     self.dfa.use_failures(True)
-    self.dfa.solid_states = self.solid_states
-    return self
+    return self.dfa
 
   def extend(self, ptr, token):
     new = self.dfa.new_state([ptr + 1])

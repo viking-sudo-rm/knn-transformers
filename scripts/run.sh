@@ -22,8 +22,8 @@ python3 -u run_clm.py \
   --min_knns=10000 \
   --max_knns=1024 \
   --max_states=-1 \
-  --no_save=True \
-  --truncate_dstore=1000
+  --no_save=True
+  # --truncate_dstore=1000
   # --eval_limit=-1 \
   # --pointer_log_path=trace/${METHOD}.txt \
   # --count_plot_path=trace/${METHOD}.png
