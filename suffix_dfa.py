@@ -10,7 +10,7 @@ from torch import nn
 from enum import Enum, auto
 from pathlib import Path
 import glob
-from itertools import zip_longest, islice, chain
+from itertools import zip_longest
 
 from tqdm import tqdm
 
@@ -21,43 +21,17 @@ import faiss.contrib.torch_utils
 from faiss import IndexFlatL2
 import scipy.sparse as sp
 
+from src.serialize_dfa import save_dfa, load_dfa
 from src.suffix_dfa_builder import SuffixDfaBuilder
 from src.trie_builder import TrieBuilder
 from src.retriever import Retriever
 from src.retriever_builder import RetrieverBuilder
-from src.cache import Cache
 from src.state_manager import StateManager
+from src.log_pointers import PointerLogger
+from src.metrics import Metrics, CountMetrics, PlotMetrics
 
 logger = logging.getLogger(__name__)
 logger.setLevel(20)
-
-
-class _Metrics:
-
-    def __init__(self,
-                 n_total: int = 0,
-                 n_pointers: int = 0,
-                 n_empty: int = 0,
-                 n_states: int = 0,
-                ):
-        self.n_total = n_total
-        self.n_pointers = n_pointers
-        self.n_empty = n_empty
-        self.n_states = n_states
-
-    def update(self, sm, pointers) -> None:
-        self.n_total += 1
-        self.n_pointers += len(pointers)
-        self.n_states += len(sm.states)
-        if len(sm.states) == 0:
-            self.n_empty += 1
-    
-    def get_metrics_dict(self) -> dict:
-        return {
-            "n_states": self.n_pointers / self.n_total,
-            "n_pointers": self.n_pointers / self.n_total,
-            "n_empty": self.n_empty / self.n_total,
-        }
 
 
 class SuffixDfaWrapper(KNNWrapper):
@@ -72,7 +46,11 @@ class SuffixDfaWrapper(KNNWrapper):
                  cache_path: str = ".cache",
                  linear_dfa: bool = False,
                  solid_only: bool = False,
-                 max_states: int = 1024,
+                 max_states: int = -1,
+                 pointer_log_path: str = None,
+                 count_plot_path: str = None,
+                 eval_limit: int = -1,
+                 no_save: bool = False,
                  **kwargs):
         super().__init__(**kwargs)
         self.no_pointer = no_pointer
@@ -85,7 +63,11 @@ class SuffixDfaWrapper(KNNWrapper):
         self.linear_dfa = linear_dfa
         self.solid_only = solid_only
         self.max_states = max_states
-        self.metrics = _Metrics()
+        self.pointer_log_path = pointer_log_path
+        self.count_plot_path = count_plot_path
+        self.eval_limit = eval_limit
+        self.no_save = no_save
+        self.metrics: Metrics = CountMetrics() if count_plot_path is None else PlotMetrics()
 
         if members is None:
             available_member_files = glob.glob(f'{self.dstore_dir}/members*')
@@ -117,40 +99,37 @@ class SuffixDfaWrapper(KNNWrapper):
         else:
             cache_path = os.path.join(self.cache_path, f"{self.truncate_dstore}-reto")
         logger.info(f"Using cache in {cache_path}")
-        cache = Cache(cache_path, log_fn=logger.info)
-        cache.register_tuple(("dfa", "solid_states"), self._build_suffix_automaton)
-        self.dfa = cache.get("dfa")
-        self.solid_states = cache.get("solid_states")
 
-        logger.info(f"# states: {len(self.dfa.weights)}")
-        logger.info(f"# trans: {len(self.dfa.transitions)}")
-        logger.info(f"# solid: {len(self.solid_states)}")
-        logger.info(f"# fails: {len(self.dfa.failures)}")
-
-        cache.register("inverse_failures", lambda: RetrieverBuilder.build_inverse_failures(self.dfa))
-        cache.register("factor_lengths", lambda: RetrieverBuilder.build_factor_lengths(self.dfa))
-        inverse_failures = cache.get("inverse_failures")
-        factor_lengths = None if self.min_factor_length == 0 else cache.get("factor_lengths")
-        self.retriever = Retriever(self.dfa, inverse_failures, factor_lengths, self.min_factor_length, max_pointers=None)
+        dfa = self._build_suffix_automaton(cache_path)
+        logger.info(f"# states: {len(dfa.weights)}")
+        logger.info(f"# trans: {len(dfa.transitions)}")
+        logger.info(f"# solid: {len(dfa.solid_states)}")
+        logger.info(f"# fails: {len(dfa.failures)}")
+        self.retriever = self._build_retriever(cache_path, dfa)
 
     @torch.no_grad()
-    def _build_suffix_automaton(self):
+    def _build_suffix_automaton(self, cache_path):
         """Build a suffix automaton over the data store, or load it if it is cached."""
+        dfa_path = os.path.join(cache_path, "dfa")
+        if os.path.isdir(dfa_path):
+            return load_dfa(dfa_path)
+
         dstore = self.vals.reshape(-1)
         if self.truncate_dstore > -1:
             dstore = dstore[:self.truncate_dstore].clone()
+        logger.info(f"Building {'linear' if self.linear_dfa else 'suffix'} DFA on dstore of size {len(dstore)}...")
+        builder = TrieBuilder() if self.linear_dfa else SuffixDfaBuilder()
+        builder.build(dstore)
+        logger.info("DFA built!")
 
-        if not self.linear_dfa:
-            builder = SuffixDfaBuilder()
-            builder.build(dstore)
-            logger.info("Adding failure transitions...")
-            builder.add_failures()
-            logger.info("Suffix DFA built!")
-        else:
-            builder = TrieBuilder()
-            builder.build(dstore)
-            logger.info("Linear DFA built!")
-        return builder.dfa, builder.solid_states
+        if not self.no_save:
+            save_dfa(dfa_path, builder.dfa)
+        return builder.dfa
+
+    def _build_retriever(self, cache_path, dfa):
+        # TODO: Might want to cache this to speed up iteration time!
+        builder = RetrieverBuilder(self.min_factor_length, max_pointers=None)
+        return builder.build(dfa)
 
     def post_forward_hook(self, module, input, output):
         shift = 0 if self.is_encoder_decoder else 1
@@ -179,16 +158,21 @@ class SuffixDfaWrapper(KNNWrapper):
         cur_dists = torch.tensor([], dtype=torch.float32)
         no_lookup_counter = 0
 
-        sm = StateManager(self.solid_states,
-                          self.retriever,
+        sm = StateManager(self.retriever,
                           solid_only=self.solid_only,
                           max_states=self.max_states,
                           add_initial=self.add_initial)
 
+        pointer_log = PointerLogger.open(self.pointer_log_path, self.eval_limit)
+
         for idx, (timestep_query, label) in enumerate(zip_longest(queries, captured_labels)):
             perform_search = False
             pointers = torch.tensor(sm.get_pointers())
-            self.metrics.update(sm, pointers)
+
+            if pointer_log.done(idx):
+                logger.info(f"Exiting early after {self.eval_limit} steps.")
+                exit()
+            pointer_log.log(pointers)
 
             if self.no_pointer or pointers.numel() < self.min_knns:
                 perform_search = True
@@ -211,11 +195,16 @@ class SuffixDfaWrapper(KNNWrapper):
                 cur_knns = cur_knns[cur_dists.argsort(descending=True)]
                 if self.truncate_dstore > -1:
                     cur_knns = cur_knns[cur_knns < self.truncate_dstore]
-                # FIXME: This should remove active states.
+                self.metrics.update(sm, pointers, cur_knns)
                 sm.add_pointers(cur_knns)
 
-            # In the DFA, the token is an np.int32, but the type conversion should work out.
+            # if len(cur_knns) != len(sm.states):
+            #     logger.info("pre transition")
+            #     breakpoint()
             sm.transition(token=label.item())
+            # if len(cur_knns) != len(sm.states):
+            #     logger.info("post transition")
+            #     breakpoint()
 
         interpolated_scores = KNNWrapper.interpolate(torch.stack(all_knn_probs), lm_logits, self.lmbda) # (nonpad, vocab)
         output[nonpad_mask] = interpolated_scores
@@ -279,7 +268,9 @@ class SuffixDfaWrapper(KNNWrapper):
         metrics = {'lookups_saved': np.sum(self.no_lookup_counter_history)/
             (np.sum(self.no_lookup_counter_history) + len(self.no_lookup_counter_history)),
         }
+        metrics["method"] = "suffix_dfa"
         metrics.update(self.metrics.get_metrics_dict())
+        self.metrics.action(self.count_plot_path)
         return metrics
 
     def break_out(self):

@@ -12,41 +12,28 @@ class StateManager:
         retriever: An object for retrieving pointers from states.
 
     TODO:
-        Replace states with a list instead of set? We might want to upweight states occuring more than once.
+        Refactor to be stateless, add initialize method?
     """
 
     def __init__(self,
-                 solid_states: list[int],
                  retriever: Retriever,
-                 states: set[int] = None,
+                 states: list[int] = None,
                  solid_only: bool = False,
                  max_states: int = -1,
-                 clear: bool = True,
                  add_initial: bool = True,
                 ):
-        self.dfa: WFA = retriever.dfa
-        self.solid_states = solid_states
         self.retriever = retriever
+        self.dfa: WFA = retriever.dfa
+        self.solid_states = self.dfa.solid_states
         self.solid_only = solid_only
         self.max_states = max_states
-        self.clear = clear
 
         if states:
             self.states = states
         elif add_initial:
-            self.states = set([self.dfa.initial])
+            self.states = [self.dfa.initial]
         else:
-            self.states = set()
-
-    def transition(self, token) -> None:
-        queue = list(self.states)
-        for state in queue:
-            self.states.remove(state)
-        for state in queue:
-            next_state, _ = self.dfa.next_state(state, token)
-            # Handle the case where the DFA does not have failure transitions.
-            if next_state is not None:
-                self.states.add(next_state)
+            self.states = []
 
     def get_pointers(self):
         if not self.solid_only:
@@ -58,15 +45,10 @@ class StateManager:
         """Add pointers from a list to the state manager.
         
         Assumes pointers are sorted by priority."""
-        if self.clear:
-            self.states.clear()
+        if self.max_states != -1:
+            pointers = pointers[:self.max_states]
+        self.states = [self.solid_states[ptr] for ptr in pointers]
 
-        if self.max_states == -1:
-            self.states.update(self.solid_states[ptr] for ptr in pointers)
-            return
-
-        for ptr in pointers:
-            if len(self.states) >= self.max_states:
-                break
-            state = self.solid_states[ptr]
-            self.states.add(state)
+    def transition(self, token) -> None:
+        self.states = [self.dfa.next_state(q, token) for q in self.states]
+        self.states = [q for q in self.states if q is not None]

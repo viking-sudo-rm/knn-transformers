@@ -12,14 +12,9 @@ class SuffixDfaBuilderTest(unittest.TestCase):
     string = "abb"
     builder = SuffixDfaBuilder()
     builder.build(string)
-    builder.add_failures()
-    self.assertDictEqual(builder.dfa.weights, {0: [0, 1, 2, 3], 1: [1], 2: [2], 3: [3], 4: [2, 3]})
-    self.assertDictEqual(builder.dfa.transitions,
-                         {(0, "a"): (1, None),
-                          (1, "b"): (2, None),
-                          (2, "b"): (3, None),
-                          (0, "b"): (4, None),
-                          (4, "b"): (3, None)})
+    self.assertEqual(builder.dfa.weights, [[0], [1], [2], [3], [2, 3]])
+    self.assertEqual(builder.dfa.transitions,
+                     [[('a', 1), ('b', 4)], [('b', 2)], [('b', 3)], [], [('b', 3)]])
     self.assertEqual(builder.dfa.forward("abb"), [3])
     self.assertEqual(builder.dfa.forward("ab"), [2])
 
@@ -27,7 +22,6 @@ class SuffixDfaBuilderTest(unittest.TestCase):
     string = "abcab"
     builder = SuffixDfaBuilder()
     builder.build(string)
-    builder.add_failures()
     self.assertEqual(builder.dfa.forward("ca"), [4])
 
   def test_build_on_int_array(self):
@@ -35,7 +29,6 @@ class SuffixDfaBuilderTest(unittest.TestCase):
     string = np.array([0, 1, 2])
     builder = SuffixDfaBuilder()
     builder.build(string)
-    builder.add_failures()
     dfa = builder.dfa
     result12 = dfa.forward(np.array([1, 2]))
     self.assertEqual(result12, [3])
@@ -44,7 +37,6 @@ class SuffixDfaBuilderTest(unittest.TestCase):
     string = "cababa"
     builder = SuffixDfaBuilder()
     builder.build(string)
-    builder.add_failures()
     self.assertListEqual(builder.dfa.forward("ab"), [3, 5])
 
   def test_build_on_tensor(self):
@@ -52,5 +44,7 @@ class SuffixDfaBuilderTest(unittest.TestCase):
     string = torch.tensor([0, 1, 2])
     builder = SuffixDfaBuilder()
     builder.build(string)
-    for _, token in builder.dfa.transitions.keys():
-      self.assertIsInstance(token, int)
+    weights = list(builder.dfa.weights)
+    self.assertIsInstance(weights[0][0], np.int32)
+    for token, _ in builder.dfa.transitions[0]:
+      self.assertIsInstance(token, np.int32)

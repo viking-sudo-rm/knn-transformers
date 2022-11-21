@@ -15,7 +15,6 @@ for idx in range(5, len(states), 3):
 
 builder = SuffixDfaBuilder()
 builder.build("ababa")
-builder.add_failures()
 suffix_dfa = builder.dfa
 
 
@@ -37,3 +36,7 @@ class RetrieverBuilderTest(unittest.TestCase):
     def test_build_inverse_failures_suffix(self):
         inverse_failures = RetrieverBuilder.build_inverse_failures(suffix_dfa)
         self.assertEqual(inverse_failures, {0: [1, 2], 1: [3], 2: [4], 3: [5]})
+
+    def test_retriever_builder_extra_flags(self):
+        builder = RetrieverBuilder(min_factor_length=2, max_pointers=30)
+        builder.build(suffix_dfa)

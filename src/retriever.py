@@ -23,12 +23,16 @@ class Retriever:
     self.retrieved = defaultdict(int)
 
   def gen_pointers(self, states: Iterable[int]) -> Iterable[int]:
+    for state in states:
+      yield from self.gen_pointers_from_state(state)
+
+  def gen_pointers_from_state(self, state: int) -> Iterable[int]:
     """Get pointers out of a state in the DFA."""
     self.n_retrievals += 1
     counter = 0
     # TODO: Follow failure path of each state while >= self.min_factor_length??
     # TODO: Would this be different than a k-gram lookup model?
-    queue = list(states)
+    queue = [state]
 
     while self.max_pointers is None or counter < self.max_pointers:
       if not queue:

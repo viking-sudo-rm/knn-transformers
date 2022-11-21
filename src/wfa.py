@@ -1,8 +1,8 @@
 """Class representing weighted finite automata."""
 
-import collections
-from typing import Any, Dict, Iterable
+from typing import Any, Optional, Iterable
 
+from .binary_search import binary_search
 from . import semiring
 
 
@@ -17,40 +17,46 @@ class WFA:
   It is possible to modify the automaton, score strings, and merge states.
   """
 
-  def __init__(self, sr: semiring.Semiring):
+  def __init__(self, sr: semiring.Semiring, failures: bool = False):
     self.sr = sr
-    self.counter = 0
+    self._failures = failures
     self.initial = None
-    self.weights = {}
-    self.transitions = {}
-    self.failures: Dict[State, State] = {}
-    self.edges_out = collections.defaultdict(list)
 
-  def next_state(self, state, token) -> tuple[State, Any]:
-    """Return next state and transition weight of a token given the current state."""
-    if (state, token) in self.transitions:
-      return self.transitions[state, token]
-    elif state in self.failures:
-      fail_state = self.failures[state]
-      if fail_state == state:
-        # If we reach a cycle failure transition, we consume the current token.
-        # This makes the DFA work correctly.
-        return state, None
-      return self.next_state(fail_state, token)
+    self.weights: list[int] = []
+    self.transitions: list[list[int, int]] = []
+    self.failures: Optional[list[int]]
+    if failures:
+      self.failures = []
     else:
-      return None, None
-  
-  def transition(self, string: Iterable[Token], state=None) -> tuple[State, Any]:
+      self.failures = None
+
+  # We return a weight for API consistency.
+  def next_state(self, state, token) -> State:
+    """Return next state and transition weight of a token given the current state."""
+    transitions = self.transitions[state]
+    idx = binary_search(token, transitions)
+    if idx < len(transitions):
+      key, target = transitions[idx]
+      if key == token:
+        return target
+    
+    # Otherwise, we follow a failure transition.
+    if not self._failures or self.failures is None:
+      return None
+    fail_state = self.failures[state]
+    if fail_state == None:
+      return None
+    if fail_state == state:
+      return state
+    return self.next_state(fail_state, token)
+
+  def transition(self, string: Iterable[Token], state=None) -> State:
     state = state or self.initial
-    cum_weight = self.sr.one
     for token in string:
-      state, weight = self.next_state(state, token)
+      state = self.next_state(state, token)
       if state is None:
-        return state, cum_weight
-      # Only update weight from transition if it is specified.
-      if weight is not None:
-        cum_weight = self.sr.mul(cum_weight, weight)
-    return state, cum_weight
+        return None
+    return state
 
   def forward(self, string: Iterable[Token]) -> "self.sr.type":
     """Compute the weight assigned to string.
@@ -61,40 +67,45 @@ class WFA:
     Returns:
       Weight assigned to string by the WFA.
     """
-    state, cum_weight = self.transition(string)
+    state = self.transition(string)
     if state is None or self.weights[state] is None:
       return self.sr.zero
-    elif cum_weight is None or cum_weight == self.sr.one:
-      return self.weights[state]
     else:
-      return self.sr.mul(cum_weight, self.weights[state])
+      return self.weights[state]
 
   def new_state(self, weight=None) -> State:
-    assert weight is None or isinstance(weight, self.sr.type)
-    state = self.counter
-    self.weights[state] = weight
-    self.counter += 1
+    state = len(self.weights)
     if self.initial is None:
       self.initial = state
+    self.weights.append(weight)
+    self.transitions.append([])
+    if self.failures is not None:
+      self.failures.append(None)
     return state
 
-  # FIXME(lambdaviking): Rewrite without adjacency representation.
-  # def remove_state(self, state: State) -> None:
-  #   del self.weights[state]
-  #   for token, state2, weight in self.edges_in[state]:
-  #     self.edges_out[state2].remove((token, state, weight))
-  #     del self.transitions[state, token]
-  #   del self.edges_in[state]
-  #   for token, state2, weight in self.edges_out[state]:
-  #     self.edges_in[state2].remove((token, state, weight))
-  #   del self.edges_out[state]
-
-  def add_edge(self, state1, token, state2, weight=None):
-    assert weight is None or isinstance(weight, self.sr.type)
-    self.transitions[state1, token] = (state2, weight)
-    # We use these data structures to track which tokens come out of a state.
-    self.edges_out[state1].append(token)
+  def add_edge(self, state1, token, state2) -> bool:
+    transitions = self.transitions[state1]
+    idx = binary_search(token, transitions)
+    if idx == len(transitions):
+      transitions.insert(idx, (token, state2))
+      return True
+    key, target = transitions[idx]
+    if key != token:
+      transitions.insert(idx, (token, state2))
+      return True
+    if target == state2:
+      return False
+    transitions[idx] = (token, state2)
+    return True
   
   def remove_edge(self, state: State, token: Token) -> bool:
-    del self.transitions[state, token]
-    return self.edges_out[state].remove(token)
+    transitions = self.transitions[state]
+    idx = binary_search(token, transitions)
+    key, target = transitions[idx]
+    if key == token:
+      transitions.pop(idx)
+      return True
+    return False
+
+  def use_failures(self, status: bool):
+    self._failures = status

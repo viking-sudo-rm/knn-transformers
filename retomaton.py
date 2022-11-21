@@ -21,15 +21,20 @@ import faiss.contrib.torch_utils
 from faiss import IndexFlatL2
 import scipy.sparse as sp
 
+from src.log_pointers import PointerLogger
+
 logger = logging.getLogger(__name__)
 logger.setLevel(20)
 
 class RetomatonWrapper(KNNWrapper):
-    def __init__(self, no_pointer=False, min_knns=1, max_knns=1024, members=None, **kwargs):
+    def __init__(self, no_pointer=False, min_knns=1, max_knns=1024, members=None, pointer_log_path: str = None, eval_limit: int = -1, **kwargs):
         super().__init__(**kwargs)
         self.no_pointer = no_pointer
         self.min_knns = min_knns
         self.max_knns = max_knns
+
+        self.pointer_log_path = pointer_log_path
+        self.eval_limit = eval_limit
 
         if members is None:
             available_member_files = glob.glob(f'{self.dstore_dir}/members*')
@@ -80,10 +85,17 @@ class RetomatonWrapper(KNNWrapper):
         cur_dists = torch.tensor([], dtype=torch.float32)
         no_lookup_counter = 0
 
-        for timestep_query, label in zip_longest(queries, captured_labels):
+        pointer_log = PointerLogger.open(self.pointer_log_path, self.eval_limit)
+
+        for idx, (timestep_query, label) in enumerate(zip_longest(queries, captured_labels)):
             perform_search = False
             extended_pointers = None
             pointers = cur_knns + 1
+
+            if pointer_log.done(idx):
+                logger.info(f"Exiting early after {self.eval_limit} steps.")
+                exit()
+            pointer_log.log(pointers)
 
             if self.no_pointer or cur_knns.numel() < self.min_knns:
                 perform_search = True

@@ -4,15 +4,16 @@ import os
 
 class Cache:
 
-  def __init__(self, path: str, log_fn = None):
+  def __init__(self, path: str, log_fn = None, no_save: bool = False):
     self.path = path
     self.log_fn = log_fn or (lambda x: x)
+    self.no_save = no_save
     self.registry = {}
   
   def register_tuple(self, object_names, work_fn):
     for object_name in object_names:
       self.registry[object_name] = (object_names, work_fn)
-  
+
   def register(self, object_name, work_fn):
     self.register_tuple((object_name,), lambda: (work_fn(),))
 
@@ -24,7 +25,8 @@ class Cache:
     self.log_fn(f"Computing {object_name}...")
     results = work_fn()
     for result, obj_name in zip(results, object_names):
-      self.save(result, obj_name)
+      if not self.no_save:
+        self.save(result, obj_name)
       if obj_name == object_name:
         final_result = result
     return final_result

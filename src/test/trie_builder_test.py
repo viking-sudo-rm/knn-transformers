@@ -1,5 +1,6 @@
 import unittest
 import torch
+import numpy as np
 
 from src.trie_builder import TrieBuilder
 
@@ -10,30 +11,20 @@ class TrieBuilderTest(unittest.TestCase):
         builder = TrieBuilder()
         builder.build("abab")
         dfa = builder.dfa
-        self.assertListEqual(
-            list(dfa.weights.values()), [[0], [1], [2], [3], [4]])
-        self.assertDictEqual(dfa.transitions,
-        {
-            (0, "a"): (1, None),
-            (1, "b"): (2, None),
-            (2, "a"): (3, None),
-            (3, "b"): (4, None),
-        }
-        )
-
+        self.assertListEqual(dfa.weights,
+                             [[0], [1], [2], [3], [4]])
+        self.assertEqual(dfa.transitions,
+                         [[("a", 1)], [("b", 2)], [("a", 3)], [("b", 4)], []])
         self.assertListEqual(builder.solid_states, [0, 1, 2, 3, 4])
 
     def test_build_tensor(self):
         builder = TrieBuilder()
         builder.build(torch.tensor([1, 1, 1]))
         dfa = builder.dfa
-        weights = list(dfa.weights.values())
-        self.assertIsInstance(weights[0][0], int)
-        for _, token in dfa.transitions.keys():
-            self.assertIsInstance(token, int)
-        self.assertListEqual(weights, [[0], [1], [2], [3]])
-        self.assertDictEqual(dfa.transitions, {
-            (0, 1): (1, None),
-            (1, 1): (2, None),
-            (2, 1): (3, None),
-        })
+        self.assertIsInstance(dfa.weights[0][0], np.int32)
+        for token, _ in dfa.transitions[0]:
+            self.assertIsInstance(token, np.int32)
+        self.assertListEqual(dfa.weights,
+                             [[0], [1], [2], [3]])
+        self.assertEqual(dfa.transitions,
+                         [[(1, 1)], [(1, 2)], [(1, 3)], []])

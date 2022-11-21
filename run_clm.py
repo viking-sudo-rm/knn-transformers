@@ -236,6 +236,9 @@ class KNNArguments:
     num_clusters: int = field(default=500000)
     sample_size: int = field(default=20000000)
     members: str = field(default=None)
+    pointer_log_path: str = field(default=None)
+    count_plot_path: str = field(default=None)
+    eval_limit: int = field(default=-1)
 
     ## Suffix DFA args:
     suffix_dfa: bool = field(default=False)
@@ -245,7 +248,8 @@ class KNNArguments:
     cache_path: str = field(default=".cache")
     linear_dfa: bool = field(default=False)
     solid_only: bool = field(default=False)
-    max_states: int = field(default=1024)
+    max_states: int = field(default=-1)
+    no_save: bool = field(default=False)
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
@@ -434,7 +438,8 @@ def main():
             k=knn_args.k, lmbda=knn_args.lmbda, knn_temp=knn_args.knn_temp, probe=knn_args.probe,
             no_pointer=knn_args.no_pointer, min_knns=knn_args.min_knns, max_knns=knn_args.max_knns,
             members=knn_args.members, truncate_dstore=knn_args.truncate_dstore, min_factor_length=knn_args.min_factor_length, add_initial=knn_args.add_initial,
-            cache_path=knn_args.cache_path, linear_dfa=knn_args.linear_dfa, solid_only=knn_args.solid_only, max_states=knn_args.max_states)
+            cache_path=knn_args.cache_path, linear_dfa=knn_args.linear_dfa, solid_only=knn_args.solid_only, max_states=knn_args.max_states,
+            pointer_log_path=knn_args.pointer_log_path, count_plot_path=knn_args.count_plot_path, eval_limit=knn_args.eval_limit, no_save=knn_args.no_save)
     elif knn_args.retomaton or knn_args.cluster_dstore:
         knn_wrapper = RetomatonWrapper(dstore_size=knn_args.dstore_size, dstore_dir=knn_args.dstore_dir, 
             dimension=dimension, 
@@ -443,7 +448,7 @@ def main():
             recompute_dists=knn_args.recompute_dists,
             k=knn_args.k, lmbda=knn_args.lmbda, knn_temp=knn_args.knn_temp, probe=knn_args.probe,
             no_pointer=knn_args.no_pointer, min_knns=knn_args.min_knns, max_knns=knn_args.max_knns,
-            members=knn_args.members)
+            members=knn_args.members, pointer_log_path=knn_args.pointer_log_path, eval_limit=knn_args.eval_limit)
     elif knn_args.knn:
         knn_wrapper = KNNWrapper(dstore_size=knn_args.dstore_size, dstore_dir=knn_args.dstore_dir, 
             dimension= dimension, 
