@@ -29,6 +29,7 @@ from src.retriever_builder import RetrieverBuilder
 from src.state_manager import StateManager
 from src.log_pointers import PointerLogger
 from src.metrics import Metrics, CountMetrics, PlotMetrics
+from src.wfa import WFA
 
 logger = logging.getLogger(__name__)
 logger.setLevel(20)
@@ -108,7 +109,7 @@ class SuffixDfaWrapper(KNNWrapper):
         self.retriever = self._build_retriever(cache_path, dfa)
 
     @torch.no_grad()
-    def _build_suffix_automaton(self, cache_path):
+    def _build_suffix_automaton(self, cache_path) -> WFA:
         """Build a suffix automaton over the data store, or load it if it is cached."""
         dfa_path = os.path.join(cache_path, "dfa")
         if os.path.isdir(dfa_path):
@@ -119,14 +120,14 @@ class SuffixDfaWrapper(KNNWrapper):
             dstore = dstore[:self.truncate_dstore].clone()
         logger.info(f"Building {'linear' if self.linear_dfa else 'suffix'} DFA on dstore of size {len(dstore)}...")
         builder = TrieBuilder() if self.linear_dfa else SuffixDfaBuilder()
-        builder.build(dstore)
+        dfa = builder.build(dstore)
         logger.info("DFA built!")
 
         if not self.no_save:
-            save_dfa(dfa_path, builder.dfa)
-        return builder.dfa
+            save_dfa(dfa_path, dfa)
+        return dfa
 
-    def _build_retriever(self, cache_path, dfa):
+    def _build_retriever(self, cache_path, dfa) -> Retriever:
         # TODO: Might want to cache this to speed up iteration time!
         builder = RetrieverBuilder(self.min_factor_length, max_pointers=None)
         return builder.build(dfa)
