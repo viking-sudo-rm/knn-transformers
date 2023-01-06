@@ -1,28 +1,30 @@
 from unittest import TestCase
+import shutil
+import tempfile
 
-from src.semiring import PointerSemiring
 from src.wfa import WFA
 from src import serialize_dfa
 
 
-# FIXME: Don't support serializing string DFAs!
-# string_dfa = WFA(BooleanSemiring())
-# string_dfa.new_state()
-# string_dfa.new_state(weight=True)
-# string_dfa.add_edge(0, "a", 1)
-# string_dfa.add_edge(0, "b", 0)
-# string_dfa.add_edge(1, "b", 0)
-
-
-dfa = WFA(PointerSemiring())
-dfa.new_state([2])
-dfa.new_state([3, 4])
+dfa = WFA(2)
+dfa.add_state(10)
+dfa.add_state(11)
 dfa.add_edge(0, 0, 1)
 dfa.add_edge(0, 1, 0)
 dfa.add_edge(1, 1, 0)
 
+fail_dfa = WFA(1, failures=True)
+fail_dfa.add_state(10)
+fail_dfa.failures[0] = 0
+
 
 class SerializeDfaTest(TestCase):
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir)
 
     def test_serialize_transitions(self):
         flat_transitions, lengths = serialize_dfa.get_flat_transitions(dfa)
@@ -33,9 +35,20 @@ class SerializeDfaTest(TestCase):
         transitions = serialize_dfa.get_transitions(flat_transitions, lengths)
         self.assertEqual(transitions, dfa.transitions)
 
-    def test_serialize_weights(self):
-        flat_weights, lengths = serialize_dfa.get_flat_weights(dfa)
-        flat_weights = list(flat_weights)
-        lengths = list(lengths)
-        self.assertListEqual(flat_weights, [2, 3, 4])
-        self.assertListEqual(lengths, [1, 2])
+    def test_save_load(self):
+        serialize_dfa.save_dfa(self.test_dir, dfa)
+        dfa2 = serialize_dfa.load_dfa(self.test_dir)
+        self.assertListEqual(dfa2.weights.tolist(), [10, 11])
+        self.assertEqual(dfa2.transitions, [[(0, 1), (1, 0)], [(1, 0)]])
+        self.assertIsNone(dfa2.failures)
+        self.assertEqual(dfa2.n_states, 2)
+        self.assertEqual(dfa2.initial, 0)
+
+    def test_save_load_failures(self):
+        serialize_dfa.save_dfa(self.test_dir, fail_dfa)
+        dfa2 = serialize_dfa.load_dfa(self.test_dir)
+        self.assertListEqual(dfa2.weights.tolist(), [10])
+        self.assertEqual(dfa2.transitions, [[]])
+        self.assertEqual(dfa2.failures.tolist(), [0])
+        self.assertEqual(dfa2.n_states, 1)
+        self.assertEqual(dfa2.initial, 0)

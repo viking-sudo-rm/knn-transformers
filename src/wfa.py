@@ -1,38 +1,48 @@
-"""Class representing weighted finite automata."""
+"""Class representing a weighted automaton, where the weights can be int-valued (via Python int method)."""
 
 from typing import Any, Optional, Iterable
+import numpy as np
 
 from .binary_search import binary_search
-from . import semiring
 
 
 State = int
+Pointer = int
 Token = str
 
 
 class WFA:
 
-  """Class representing a deterministic weighted automaton over some semiring.
+  """Class representing the automaton.
 
-  It is possible to modify the automaton, score strings, and merge states.
+  Generally, states can be updated via next_state or transition.
+
+  We also implement a forward method for ease of access, though this doesn't get called by the API.
+
+  States are integers. -1 represents a failure sink state.
+
+  Weights are integer-valued, representing pointers in the datastore. -1 is reserved for empty. 
   """
 
-  def __init__(self, sr: semiring.Semiring, failures: bool = False):
-    self.sr = sr
+  def __init__(self, n_states: int, failures: bool = False):
+    self.n_states = n_states
     self._failures = failures
     self.initial = None
 
-    self.weights: list[int] = []
-    self.transitions: list[list[int, int]] = []
-    self.failures: Optional[list[int]]
+    self.weights = -np.ones(n_states, dtype=np.int32)
+    self.transitions: list[list[tuple[Token, State]]] = []
+
     if failures:
-      self.failures = []
+      self.failures = -np.ones(n_states, dtype=np.int32)
     else:
       self.failures = None
 
   # We return a weight for API consistency.
   def next_state(self, state, token) -> State:
     """Return next state and transition weight of a token given the current state."""
+    if state == -1:
+      return -1
+
     transitions = self.transitions[state]
     idx = binary_search(token, transitions)
     if idx < len(transitions):
@@ -42,10 +52,10 @@ class WFA:
     
     # Otherwise, we follow a failure transition.
     if not self._failures or self.failures is None:
-      return None
+      return -1
     fail_state = self.failures[state]
-    if fail_state == None:
-      return None
+    if fail_state == -1:
+      return -1
     if fail_state == state:
       return state
     return self.next_state(fail_state, token)
@@ -54,11 +64,11 @@ class WFA:
     state = state or self.initial
     for token in string:
       state = self.next_state(state, token)
-      if state is None:
-        return None
+      if state == -1:
+        return -1
     return state
 
-  def forward(self, string: Iterable[Token]) -> "self.sr.type":
+  def forward(self, string: Iterable[Token]) -> Pointer:
     """Compute the weight assigned to string.
 
     Args:
@@ -68,19 +78,19 @@ class WFA:
       Weight assigned to string by the WFA.
     """
     state = self.transition(string)
-    if state is None or self.weights[state] is None:
-      return self.sr.zero
+    if state == -1:
+      return -1
     else:
       return self.weights[state]
 
-  def new_state(self, weight=None) -> State:
-    state = len(self.weights)
+  def add_state(self, weight=-1) -> State:
+    state = len(self.transitions)
+    self.weights[state] = weight
+    self.transitions.append([])
     if self.initial is None:
       self.initial = state
-    self.weights.append(weight)
-    self.transitions.append([])
     if self.failures is not None:
-      self.failures.append(None)
+      self.failures[state] = -1
     return state
 
   def add_edge(self, state1, token, state2) -> bool:

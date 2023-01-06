@@ -5,12 +5,14 @@ from .retriever import Retriever
 
 class RetrieverBuilder:
 
-    def __init__(self, min_factor_length: int = 0, **kwargs):
+    def __init__(self,
+                 min_factor_length: int = 0,
+                 **kwargs,
+                ):
         self.min_factor_length = min_factor_length
         self.kwargs = kwargs
 
     def build(self, dfa):
-        # min_factor_length = kwargs.get("min_factor_length", 0)
         inverse_failures = self.build_inverse_failures(dfa)
         factor_lengths = self.build_factor_lengths(dfa) if self.min_factor_length > 0 else None
         return Retriever(dfa,
@@ -26,7 +28,7 @@ class RetrieverBuilder:
             return {}
         inverse_failures = defaultdict(list)
         for state, fail_state in enumerate(dfa.failures):
-            if state is None or fail_state is None:
+            if state == -1 or fail_state == -1:
                 continue
             inverse_failures[fail_state].append(state)
         if dfa.initial in inverse_failures:

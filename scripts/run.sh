@@ -5,6 +5,7 @@ MODEL=neulab/gpt2-finetuned-wikitext103
 METHOD=suffix_dfa
 CHAIN=False
 MIN_LENGTH=2
+MIN_KNNS=10000
 INITIAL=False
 NO_LOAD=True
 
@@ -19,10 +20,9 @@ python3 -u run_clm.py \
   --min_factor_length=${MIN_LENGTH} \
   --add_initial=${INITIAL} \
   --linear_dfa=${CHAIN} \
-  --min_knns=10000 \
+  --min_knns=${MIN_KNNS} \
   --max_knns=1024 \
-  --max_states=-1 \
-  --no_save=True
+  --max_states=1024
   # --truncate_dstore=1000
   # --eval_limit=-1 \
   # --pointer_log_path=trace/${METHOD}.txt \

@@ -26,7 +26,6 @@ from src.suffix_dfa_builder import SuffixDfaBuilder
 from src.trie_builder import TrieBuilder
 from src.retriever import Retriever
 from src.retriever_builder import RetrieverBuilder
-from src.state_manager import StateManager
 from src.log_pointers import PointerLogger
 from src.metrics import Metrics, CountMetrics, PlotMetrics
 from src.wfa import WFA
@@ -105,7 +104,8 @@ class SuffixDfaWrapper(KNNWrapper):
         logger.info(f"# states: {len(dfa.weights)}")
         logger.info(f"# trans: {len(dfa.transitions)}")
         logger.info(f"# solid: {len(dfa.solid_states)}")
-        logger.info(f"# fails: {len(dfa.failures)}")
+        if dfa.failures is not None:
+            logger.info(f"# fails: {len(dfa.failures)}")
         self.retriever = self._build_retriever(cache_path, dfa)
 
     @torch.no_grad()
@@ -129,7 +129,12 @@ class SuffixDfaWrapper(KNNWrapper):
 
     def _build_retriever(self, cache_path, dfa) -> Retriever:
         # TODO: Might want to cache this to speed up iteration time!
-        builder = RetrieverBuilder(self.min_factor_length, max_pointers=None)
+        builder = RetrieverBuilder(self.min_factor_length,
+                                   max_pointers=-1,
+                                   max_states=self.max_states,
+                                   solid_only=self.solid_only,
+                                   add_initial=self.add_initial,
+                                  )
         return builder.build(dfa)
 
     def post_forward_hook(self, module, input, output):
@@ -159,16 +164,14 @@ class SuffixDfaWrapper(KNNWrapper):
         cur_dists = torch.tensor([], dtype=torch.float32)
         no_lookup_counter = 0
 
-        sm = StateManager(self.retriever,
-                          solid_only=self.solid_only,
-                          max_states=self.max_states,
-                          add_initial=self.add_initial)
+        states = self.retriever.get_initial_states()
 
         pointer_log = PointerLogger.open(self.pointer_log_path, self.eval_limit)
 
         for idx, (timestep_query, label) in enumerate(zip_longest(queries, captured_labels)):
             perform_search = False
-            pointers = torch.tensor(sm.get_pointers())
+            pointers = torch.tensor(self.retriever.get_pointers(states))
+            self.metrics.update(states, pointers)
 
             if pointer_log.done(idx):
                 logger.info(f"Exiting early after {self.eval_limit} steps.")
@@ -188,24 +191,7 @@ class SuffixDfaWrapper(KNNWrapper):
                 pointers=pointers,
                 perform_search=perform_search)
             all_knn_probs.append(cur_knn_log_prob)
-
-            if not self.no_pointer and label is not None:
-                vals_are_correct_and_pointer_available = (vals_at_knns == label) & (knns < self.dstore_size - 1)
-                cur_knns = knns[vals_are_correct_and_pointer_available]
-                cur_dists = dists[vals_are_correct_and_pointer_available]
-                cur_knns = cur_knns[cur_dists.argsort(descending=True)]
-                if self.truncate_dstore > -1:
-                    cur_knns = cur_knns[cur_knns < self.truncate_dstore]
-                self.metrics.update(sm, pointers, cur_knns)
-                sm.add_pointers(cur_knns)
-
-            # if len(cur_knns) != len(sm.states):
-            #     logger.info("pre transition")
-            #     breakpoint()
-            sm.transition(token=label.item())
-            # if len(cur_knns) != len(sm.states):
-            #     logger.info("post transition")
-            #     breakpoint()
+            states = self.retriever.get_states(knns, label.item(), dists)
 
         interpolated_scores = KNNWrapper.interpolate(torch.stack(all_knn_probs), lm_logits, self.lmbda) # (nonpad, vocab)
         output[nonpad_mask] = interpolated_scores

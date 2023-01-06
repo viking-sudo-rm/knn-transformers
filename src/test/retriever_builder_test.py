@@ -6,14 +6,14 @@ from src.retriever_builder import RetrieverBuilder
 from src.suffix_dfa_builder import SuffixDfaBuilder
 
 
-solid_dfa = WFA(BooleanSemiring())
-states = [solid_dfa.new_state() for _ in range(10)]
+solid_dfa = WFA(n_states=20)
+states = [solid_dfa.add_state() for _ in range(10)]
 for idx in range(1, len(states)):
     solid_dfa.add_edge(states[idx - 1], "a", states[idx])
 for idx in range(5, len(states), 3):
     solid_dfa.add_edge(states[idx - 3], "b", states[idx])
 
-builder = SuffixDfaBuilder()
+builder = SuffixDfaBuilder(5)
 builder.build("ababa")
 suffix_dfa = builder.dfa
 

@@ -2,6 +2,7 @@ import os
 import numpy as np
 import logging
 import pickle
+import gc
 
 from .wfa import WFA
 
@@ -10,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def flatten(li):
-    return [item for sublist in li for item in sublist]
+    return (item for sublist in li for item in sublist)
 
 
 def get_flat_transitions(dfa: WFA):
@@ -18,8 +19,10 @@ def get_flat_transitions(dfa: WFA):
     lengths = []
     for transitions in dfa.transitions:
         flattened = flatten(transitions)
+        pre_length = len(all_transitions)
         all_transitions.extend(flattened)
-        lengths.append(len(flattened))
+        post_length = len(all_transitions)
+        lengths.append(post_length - pre_length)
     return np.array(all_transitions), np.array(lengths)
 
 
@@ -31,26 +34,12 @@ def get_transitions(flat_transitions, lengths):
         trans = [(flat_trans[idx], flat_trans[idx + 1]) for idx in range(0, len(flat_trans), 2)]
         transitions.append(trans)
         cum_length += length
+
+    del flat_transitions
+    del lengths
+    gc.collect()
+
     return transitions
-
-
-def get_flat_weights(dfa: WFA):
-    flat_weights = []
-    lengths = []
-    for ptrs in dfa.weights:
-        flat_weights.extend(ptrs)
-        lengths.append(len(ptrs))
-    return np.array(flat_weights), np.array(lengths)
-
-
-def get_weights(flat_weights, lengths):
-    weights = []
-    cum_length = 0
-    for length in lengths:
-        weight = list(flat_weights[cum_length:cum_length + length])
-        weights.append(weight)
-        cum_length += length
-    return weights
 
 
 def save_dfa(dir_path: str, dfa: WFA) -> None:
@@ -64,22 +53,18 @@ def save_dfa(dir_path: str, dfa: WFA) -> None:
 
     if dfa.failures is not None:
         logger.info("Saving failures...")
-        failures = np.array(dfa.failures)
-        np.save(os.path.join(dir_path, "failures.npy"), failures)
+        np.save(os.path.join(dir_path, "failures.npy"), dfa.failures)
 
     logger.info("Saving weights...")
-    flat_weights, weight_lengths = get_flat_weights(dfa)
-    np.save(os.path.join(dir_path, "flat_weights.npy"), flat_weights)
-    np.save(os.path.join(dir_path, "weight_lengths.npy"), weight_lengths)
+    np.save(os.path.join(dir_path, "weights.npy"), dfa.weights)
 
     if hasattr(dfa, "solid_states"):
         logger.info("Saving solid_states...")
-        solid_states = np.array(dfa.solid_states)
-        np.save(os.path.join(dir_path, "solid_states.npy"), solid_states)
+        np.save(os.path.join(dir_path, "solid_states.npy"), dfa.solid_states)
 
     # TODO: Datatypes for tokens?
     metadata = {
-        "sr": dfa.sr,
+        "n_states": dfa.n_states,
         "_failures": dfa._failures,
         "initial": dfa.initial,
     }
@@ -95,18 +80,17 @@ def load_dfa(dir_path: str):
 
     failures_path = os.path.join(dir_path, "failures.npy")
     if os.path.exists(failures_path):
-        failures = list(np.load(failures_path))
+        failures = np.load(failures_path)
     else:
         failures = None
 
-    flat_weights = np.load(os.path.join(dir_path, "flat_weights.npy"))
-    weight_lengths = np.load(os.path.join(dir_path, "weight_lengths.npy"))
-    weights = get_weights(flat_weights, weight_lengths)
+    weights_path = os.path.join(dir_path, "weights.npy")
+    weights = np.load(weights_path)
 
     with open(os.path.join(dir_path, "metadata.p"), "rb") as fh:
         metadata = pickle.load(fh)
 
-    dfa = WFA(metadata["sr"], failures=metadata["_failures"])
+    dfa = WFA(metadata["n_states"], failures=metadata["_failures"])
     dfa.initial = metadata["initial"]
     dfa.transitions = transitions
     dfa.failures = failures
@@ -114,6 +98,6 @@ def load_dfa(dir_path: str):
 
     solid_path = os.path.join(dir_path, "solid_states.npy")
     if os.path.exists(solid_path):
-        dfa.solid_states = list(np.load(solid_path))
+        dfa.solid_states = np.load(solid_path)
 
     return dfa
