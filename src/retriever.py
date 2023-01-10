@@ -40,8 +40,15 @@ class Retriever:
     for state in states:
       pointers.extend(ptr for ptr, _ in self.gen_pointers_from_state(state)
                       if not self.solid_only or self.solid_states[ptr] == state)
-    return pointers
+      if self.max_pointers != -1 and len(pointers) >= self.max_pointers:
+        break
+    if self.max_pointers != -1:
+      pointers = pointers[:self.max_pointers]
+    
+    # Long tensor required for using pointers as indices.
+    return torch.LongTensor(pointers)
 
+  @torch.no_grad()
   def get_states(self, pointers, token, dists=None):
     indices = []
     states = []
@@ -54,6 +61,8 @@ class Retriever:
         indices.append(idx)
         states.append(next_state)
 
+    # FIXME: Use pre-allocated arrays instead of lists.
+
     if dists is None:
       return states
 
@@ -62,6 +71,8 @@ class Retriever:
     states = states[dists.argsort(descending=True)]
     if self.max_states != -1:
         states = states[:self.max_states]
+    
+    # FIXME: Do we really need to convert to a list?
     return states.tolist()
 
   def filter_state(self, state: int) -> bool:
@@ -70,13 +81,12 @@ class Retriever:
 
   def gen_pointers_from_state(self, state: int) -> Iterable[int]:
     """Get pointers out of a state in the DFA."""
-    # self.n_retrievals += 1
     counter = 0
 
     # Essentially: retrieve all occurrences of suffix of length k in the dataset.
     if self.fail_first and self.factor_lengths is not None and self.dfa.failures is not None:
       while self.factor_lengths[state] > self.min_factor_length:
-        if self.dfa.failures[state] is None:
+        if self.dfa.failures[state] == -1:
           break
         state = self.dfa.failures[state]
 
@@ -88,16 +98,10 @@ class Retriever:
       if self.factor_lengths is not None and self.factor_lengths[q] < self.min_factor_length:
         continue
 
-      # If this state has inverse failures, its pointer will come up again, so don't return it.
       ptr = self.dfa.weights[q]
-
-      # FIXME: Don't need to track what has been retrieved anymore.
       if ptr != -1:
+        counter += 1
         yield ptr, q
-        # counter += 1
-        # if self.retrieved[ptr] != self.n_retrievals:
-        #   self.retrieved[ptr] = self.n_retrievals
-        #   yield ptr, q
 
       if q in self.inverse_failures:
         queue.extend(self.inverse_failures[q])

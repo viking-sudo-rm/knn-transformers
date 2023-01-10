@@ -47,6 +47,7 @@ class SuffixDfaWrapper(KNNWrapper):
                  linear_dfa: bool = False,
                  solid_only: bool = False,
                  max_states: int = -1,
+                 max_pointers: int = -1,
                  pointer_log_path: str = None,
                  count_plot_path: str = None,
                  eval_limit: int = -1,
@@ -63,6 +64,7 @@ class SuffixDfaWrapper(KNNWrapper):
         self.linear_dfa = linear_dfa
         self.solid_only = solid_only
         self.max_states = max_states
+        self.max_pointers = max_pointers
         self.pointer_log_path = pointer_log_path
         self.count_plot_path = count_plot_path
         self.eval_limit = eval_limit
@@ -108,18 +110,17 @@ class SuffixDfaWrapper(KNNWrapper):
             logger.info(f"# fails: {len(dfa.failures)}")
         self.retriever = self._build_retriever(cache_path, dfa)
 
-    @torch.no_grad()
     def _build_suffix_automaton(self, cache_path) -> WFA:
         """Build a suffix automaton over the data store, or load it if it is cached."""
         dfa_path = os.path.join(cache_path, "dfa")
         if os.path.isdir(dfa_path):
             return load_dfa(dfa_path)
-
         dstore = self.vals.reshape(-1)
+        n_dstore = len(dstore)
         if self.truncate_dstore > -1:
             dstore = dstore[:self.truncate_dstore].clone()
-        logger.info(f"Building {'linear' if self.linear_dfa else 'suffix'} DFA on dstore of size {len(dstore)}...")
-        builder = TrieBuilder() if self.linear_dfa else SuffixDfaBuilder()
+        logger.info(f"Building {'linear' if self.linear_dfa else 'suffix'} DFA on dstore of size {n_dstore}...")
+        builder = TrieBuilder(n_dstore) if self.linear_dfa else SuffixDfaBuilder(n_dstore)
         dfa = builder.build(dstore)
         logger.info("DFA built!")
 
@@ -130,13 +131,17 @@ class SuffixDfaWrapper(KNNWrapper):
     def _build_retriever(self, cache_path, dfa) -> Retriever:
         # TODO: Might want to cache this to speed up iteration time!
         builder = RetrieverBuilder(self.min_factor_length,
-                                   max_pointers=-1,
+                                   max_pointers=self.max_pointers,
                                    max_states=self.max_states,
                                    solid_only=self.solid_only,
                                    add_initial=self.add_initial,
                                   )
-        return builder.build(dfa)
+        logger.info("Building retriever...")
+        retriever = builder.build(dfa)
+        logger.info("Retriever built!")
+        return retriever
 
+    @torch.no_grad()
     def post_forward_hook(self, module, input, output):
         shift = 0 if self.is_encoder_decoder else 1
         if self.labels is None:
@@ -166,17 +171,13 @@ class SuffixDfaWrapper(KNNWrapper):
 
         states = self.retriever.get_initial_states()
 
-        pointer_log = PointerLogger.open(self.pointer_log_path, self.eval_limit)
+        pointer_log = PointerLogger.open(self.pointer_log_path, self.eval_limit, logger)
 
         for idx, (timestep_query, label) in enumerate(zip_longest(queries, captured_labels)):
             perform_search = False
-            pointers = torch.tensor(self.retriever.get_pointers(states))
+            pointers = self.retriever.get_pointers(states)
             self.metrics.update(states, pointers)
-
-            if pointer_log.done(idx):
-                logger.info(f"Exiting early after {self.eval_limit} steps.")
-                exit()
-            pointer_log.log(pointers)
+            pointer_log.update(idx, pointers)
 
             if self.no_pointer or pointers.numel() < self.min_knns:
                 perform_search = True
@@ -184,6 +185,11 @@ class SuffixDfaWrapper(KNNWrapper):
                 no_lookup_counter = 0
             else:
                 no_lookup_counter += 1
+            
+            # FIXME: We get one example, around 42% of the way through, where pointers matches self.dstore_size.
+            pointers = pointers[pointers < self.dstore_size]
+            # if (-1 >= pointers).any() or (pointers >= self.dstore_size).any() or pointers.isnan().any():
+            #     breakpoint()
             
             # (vocab_size, ) , (k, ), (k, ), (k, )
             cur_knn_log_prob, knns, dists, vals_at_knns = self.get_knn_log_prob(
@@ -217,7 +223,7 @@ class SuffixDfaWrapper(KNNWrapper):
             knns_vecs = torch.from_numpy(self.keys[knns]).to(self.device)
             dists = self.dist_func(query, knns_vecs) 
         
-        neg_dists = -dists       
+        neg_dists = -dists
         knn_log_probs, vals_at_knns = self.knns_to_log_prob(knns, neg_dists)
         
         return knn_log_probs, knns, neg_dists, vals_at_knns

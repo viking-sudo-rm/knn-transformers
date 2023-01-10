@@ -2,12 +2,16 @@
 MODEL=neulab/gpt2-finetuned-wikitext103
 # MODEL=neulab/distilgpt2
 
-METHOD=suffix_dfa
+# Important settings.
 CHAIN=False
 MIN_LENGTH=2
+
+# Other settings.
+METHOD=suffix_dfa
 MIN_KNNS=10000
 INITIAL=False
 NO_LOAD=True
+MAX_POINTERS=4096
 
 python3 -u run_clm.py \
   --${METHOD} \
@@ -22,7 +26,8 @@ python3 -u run_clm.py \
   --linear_dfa=${CHAIN} \
   --min_knns=${MIN_KNNS} \
   --max_knns=1024 \
-  --max_states=1024
+  --max_states=1024 \
+  --max_pointers=${MAX_POINTERS}
   # --truncate_dstore=1000
   # --eval_limit=-1 \
   # --pointer_log_path=trace/${METHOD}.txt \
