@@ -65,3 +65,9 @@ class SuffixDfaBuilderTest(unittest.TestCase):
                      [ 0,  1,  2,  3, -1, -1])
     for token, _ in builder.dfa.transitions[0]:
       self.assertIsInstance(token, np.int32)
+
+  def test_build_oracle(self):
+    string = "abbbaab"
+    builder = SuffixDfaBuilder(len(string), oracle=True)
+    dfa = builder.build(string)
+    breakpoint()

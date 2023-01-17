@@ -3,19 +3,21 @@ MODEL=neulab/gpt2-finetuned-wikitext103
 # MODEL=neulab/distilgpt2
 
 # Important settings.
-CHAIN=False
-MIN_LENGTH=2
+CHAIN=True
+MIN_LENGTH=0
+MAX_EVAL=100000
 
 # Other settings.
 METHOD=suffix_dfa
 MIN_KNNS=10000
 INITIAL=False
 NO_LOAD=True
-MAX_POINTERS=4096
+MAX_POINTERS=1
 
 python3 -u run_clm.py \
   --${METHOD} \
   --model_name_or_path ${MODEL} \
+  --max_eval_samples=${MAX_EVAL} \
   --no_load_keys=${NO_LOAD} \
   --dataset_name wikitext --dataset_config_name wikitext-103-raw-v1 \
   --output_dir checkpoints/${MODEL} \

@@ -1,4 +1,5 @@
 from collections import defaultdict
+from itertools import islice
 from typing import Iterable
 import torch
 
@@ -23,7 +24,7 @@ class Retriever:
     self.inverse_failures = inverse_failures
     self.factor_lengths = factor_lengths
     self.min_factor_length = min_factor_length
-    self.max_pointers = max_pointers
+    self.max_pointers = max_pointers  # per state
     self.max_states = max_states
     self.fail_first = fail_first
     self.add_initial = add_initial
@@ -33,18 +34,18 @@ class Retriever:
     # self.retrieved = defaultdict(int)
 
   def get_initial_states(self):
-    return [self.dfa.initial] if self.add_initial else []
+    return torch.LongTensor([self.dfa.initial]) if self.add_initial else torch.LongTensor([])
 
   def get_pointers(self, states):
     pointers = []
     for state in states:
-      pointers.extend(ptr for ptr, _ in self.gen_pointers_from_state(state)
-                      if not self.solid_only or self.solid_states[ptr] == state)
-      if self.max_pointers != -1 and len(pointers) >= self.max_pointers:
-        break
-    if self.max_pointers != -1:
-      pointers = pointers[:self.max_pointers]
-    
+      # For some reason, state.item() is critical here?
+      pointers_gen = self.gen_pointers_from_state(state.item())
+      if self.solid_only:
+        pointers_gen = ((ptr, x) for ptr, x in pointers_gen if self.solid_states[ptr] == state)
+      if self.max_pointers != -1:
+        pointers_gen = islice(pointers_gen, self.max_pointers)
+      pointers.extend(ptr for ptr, _ in pointers_gen)
     # Long tensor required for using pointers as indices.
     return torch.LongTensor(pointers)
 
@@ -63,17 +64,14 @@ class Retriever:
 
     # FIXME: Use pre-allocated arrays instead of lists.
 
+    states = torch.LongTensor(states)
     if dists is None:
       return states
-
-    states = torch.tensor(states)
     dists = dists[indices]
     states = states[dists.argsort(descending=True)]
     if self.max_states != -1:
         states = states[:self.max_states]
-    
-    # FIXME: Do we really need to convert to a list?
-    return states.tolist()
+    return states
 
   def filter_state(self, state: int) -> bool:
     return state == -1 or (self.factor_lengths is not None and self.factor_lengths[state] < self.min_factor_length)

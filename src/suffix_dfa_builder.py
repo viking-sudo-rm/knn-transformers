@@ -21,11 +21,14 @@ class SuffixDfaBuilder:
 
   Follows the suffix automaton algorithm from Algorithms on Strings, page 205.
 
-  Weights are 1-indexed pointers, where 0 represents null.
-  ```
+  Can also consult: https://en.wikipedia.org/wiki/Suffix_automaton
+
+  To understand the suffix oracle version, consult Figure 4 of "Factor oracle: a new structure for pattern matching"
   """
 
-  def __init__(self, dstore_size):
+  def __init__(self, dstore_size, oracle: bool = False):
+    self.oracle = oracle
+
     n_states = 2 * dstore_size
     self.dfa = WFA(n_states, failures=True)
 
@@ -83,27 +86,21 @@ class SuffixDfaBuilder:
     if state == -1:
       self.F[new] = self.initial
 
-    # Can consult: https://en.wikipedia.org/wiki/Suffix_automaton
-
     # We found some factor that is a prefix of the current state.
     else:
       next_state = self.dfa.next_state(state, token)
-      if self.L[state] + 1 == self.L[next_state]:
+
+      # We always want to invoke this condition if we are building the factor oracle.
+      if self.oracle or self.L[state] + 1 == self.L[next_state]:
         self.F[new] = next_state
 
       # Clone the next state to make a smaller version of it.
       else:
-        # weight = deepcopy(self.dfa.weights[next_state])
-        # weight.append(ptr + 1)
         clone = self.dfa.add_state(-1)
         self.L[clone] = self.L[state] + 1
-        # self.L.append(self.L[state] + 1)
         transitions = self.dfa.transitions[next_state]
         for s, q in transitions:
           self.dfa.add_edge(clone, s, q)
-        # for s in self.dfa.edges_out[next_state]:
-        #   q, w = self.dfa.transitions[next_state, s]
-        #   self.dfa.add_edge(clone, s, q, w)
         self.F[new] = clone
         self.F[clone] = self.F[next_state]
         self.F[next_state] = clone
