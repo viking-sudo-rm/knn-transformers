@@ -67,7 +67,10 @@ class SuffixDfaBuilderTest(unittest.TestCase):
       self.assertIsInstance(token, np.int32)
 
   def test_build_oracle(self):
+    """Example taken from Figure 6 of Allauzen et al. (1999)"""
     string = "abbbaab"
-    builder = SuffixDfaBuilder(len(string), oracle=True)
+    builder = SuffixDfaBuilder(len(string), build_method="oracle")
     dfa = builder.build(string)
-    breakpoint()
+    self.assertEqual(dfa.transitions, [[('a', 1), ('b', 2)], [('a', 6), ('b', 2)], [('a', 5), ('b', 3)], [('a', 5), ('b', 4)], [('a', 5)], [('a', 6)], [('b', 7)], []])
+    self.assertEqual(dfa.failures.tolist(), [ 0,  0,  0,  2,  3,  1,  1,  2, -1, -1, -1, -1, -1, -1])
+    self.assertEqual(dfa.solid_states.tolist(), [0, 1, 2, 3, 4, 5, 6, 7])

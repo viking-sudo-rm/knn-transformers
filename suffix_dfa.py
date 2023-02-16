@@ -29,6 +29,7 @@ from src.retriever_builder import RetrieverBuilder
 from src.log_pointers import PointerLogger
 from src.metrics import Metrics, CountMetrics, PlotMetrics
 from src.wfa import WFA
+from src.state_lm import StateLm, get_transitions
 
 logger = logging.getLogger(__name__)
 logger.setLevel(20)
@@ -44,7 +45,6 @@ class SuffixDfaWrapper(KNNWrapper):
                  min_factor_length: int = 2,
                  add_initial: bool = True,
                  cache_path: str = ".cache",
-                 linear_dfa: bool = False,
                  solid_only: bool = False,
                  max_states: int = -1,
                  max_pointers: int = -1,
@@ -52,6 +52,8 @@ class SuffixDfaWrapper(KNNWrapper):
                  count_plot_path: str = None,
                  eval_limit: int = -1,
                  no_save: bool = False,
+                 build_method: str = None,
+                 no_failures: bool = False,
                  **kwargs):
         super().__init__(**kwargs)
         self.no_pointer = no_pointer
@@ -61,7 +63,6 @@ class SuffixDfaWrapper(KNNWrapper):
         self.add_initial = add_initial
         self.truncate_dstore = truncate_dstore
         self.cache_path = cache_path
-        self.linear_dfa = linear_dfa
         self.solid_only = solid_only
         self.max_states = max_states
         self.max_pointers = max_pointers
@@ -69,6 +70,9 @@ class SuffixDfaWrapper(KNNWrapper):
         self.count_plot_path = count_plot_path
         self.eval_limit = eval_limit
         self.no_save = no_save
+        self.build_method = build_method
+        self.no_failures = no_failures
+
         self.metrics: Metrics = CountMetrics() if count_plot_path is None else PlotMetrics()
 
         if members is None:
@@ -96,12 +100,7 @@ class SuffixDfaWrapper(KNNWrapper):
     def break_into(self, model):
         super().break_into(model)
 
-        if not self.linear_dfa:
-            cache_path = os.path.join(self.cache_path, str(self.truncate_dstore))
-        else:
-            cache_path = os.path.join(self.cache_path, f"{self.truncate_dstore}-reto")
-        logger.info(f"Using cache in {cache_path}")
-
+        cache_path = self._get_cache_path()
         dfa = self._build_suffix_automaton(cache_path)
         logger.info(f"# states: {len(dfa.weights)}")
         logger.info(f"# trans: {len(dfa.transitions)}")
@@ -109,6 +108,24 @@ class SuffixDfaWrapper(KNNWrapper):
         if dfa.failures is not None:
             logger.info(f"# fails: {len(dfa.failures)}")
         self.retriever = self._build_retriever(cache_path, dfa)
+        self.lm = self._build_lm(cache_path, dfa)
+
+        if self.no_failures:
+            dfa.use_failures(False)
+            logger.info(f"Disabling failure transitions on DFA.")
+
+    def _get_cache_path(self):
+        if self.build_method: # Check if not null/empty
+            dirname = self.build_method
+        else:
+            dirname = "suffix_dfa"
+        
+        if self.truncate_dstore != -1:
+            dirname += f"-{self.truncate_dstore}"
+
+        cache_path = os.path.join(self.cache_path, dirname)
+        logger.info(f"Using cache in {cache_path}")
+        return cache_path
 
     def _build_suffix_automaton(self, cache_path) -> WFA:
         """Build a suffix automaton over the data store, or load it if it is cached."""
@@ -119,8 +136,8 @@ class SuffixDfaWrapper(KNNWrapper):
         n_dstore = len(dstore)
         if self.truncate_dstore > -1:
             dstore = dstore[:self.truncate_dstore].clone()
-        logger.info(f"Building {'linear' if self.linear_dfa else 'suffix'} DFA on dstore of size {n_dstore}...")
-        builder = TrieBuilder(n_dstore) if self.linear_dfa else SuffixDfaBuilder(n_dstore)
+        logger.info(f"Building {self.build_method} DFA on dstore of size {n_dstore}...")
+        builder = TrieBuilder(n_dstore) if self.build_method == "linear" else SuffixDfaBuilder(n_dstore, self.build_method)
         dfa = builder.build(dstore)
         logger.info("DFA built!")
 
@@ -140,6 +157,21 @@ class SuffixDfaWrapper(KNNWrapper):
         retriever = builder.build(dfa)
         logger.info("Retriever built!")
         return retriever
+    
+    def _build_lm(self, cache_path, dfa) -> StateLm:
+        return StateLm(dfa, self.vocab_size, device=self.device)
+        # trans_path = os.path.join(cache_path, "transitions.pt")
+        # deg_path = os.path.join(cache_path, "degrees.pt")
+        # if not os.path.exists(trans_path):
+        #     logger.info("Computing transitions tensor...")
+        #     transitions, degrees = get_transitions(dfa, self.vocab_size, device=self.device)
+        #     logger.info("Saving...")
+        #     torch.save(transitions, trans_path)
+        #     torch.save(degrees, deg_path)
+        # else:
+        #     transitions = torch.load(trans_path)
+        #     degrees = torch.load(deg_path)
+        # return StateLm(transitions, degrees, temp=self.knn_temperature)
 
     @torch.no_grad()
     def post_forward_hook(self, module, input, output):
@@ -175,7 +207,7 @@ class SuffixDfaWrapper(KNNWrapper):
 
         for idx, (timestep_query, label) in enumerate(zip_longest(queries, captured_labels)):
             perform_search = False
-            pointers = self.retriever.get_pointers(states)
+            pointers, paired_states = self.retriever.get_pointers(states)
             self.metrics.update(states, pointers)
             pointer_log.update(idx, pointers)
 
@@ -186,24 +218,36 @@ class SuffixDfaWrapper(KNNWrapper):
             else:
                 no_lookup_counter += 1
             
-            # FIXME: We get one example, around 42% of the way through, where pointers matches self.dstore_size.
-            pointers = pointers[pointers < self.dstore_size]
-            # if (-1 >= pointers).any() or (pointers >= self.dstore_size).any() or pointers.isnan().any():
-            #     breakpoint()
-            
-            # (vocab_size, ) , (k, ), (k, ), (k, )
-            cur_knn_log_prob, knns, dists, vals_at_knns = self.get_knn_log_prob(
+            # We get one example, around 42% of the way through, where pointers matches self.dstore_size.
+            mask = (pointers < self.dstore_size)
+            pointers = pointers[mask]
+            paired_states = paired_states[mask]
+
+            # (vocab_size, ), (k, ), (k, ), (k, ), (k, )
+            knns, neg_dists, states = self.get_dists_and_states(
                 timestep_query, 
                 pointers=pointers,
+                paired_states=paired_states,
                 perform_search=perform_search)
-            all_knn_probs.append(cur_knn_log_prob)
-            states = self.retriever.get_states(knns, label.item(), dists)
+            states = self.retriever.solidify(states, knns)
+            # cur_knn_log_probs = self.knns_to_log_prob(knns[indices], neg_dists[indices])
+            # cur_knn_log_probs = self.lm.get_log_prob(states, neg_dists[indices])
+            cur_knn_log_probs = self.lm.get_log_prob(states, neg_dists)
+            all_knn_probs.append(cur_knn_log_probs)
+
+            # In the original, we transition AFTER computing LM, which makes sense.
+            states, _ = self.retriever.transition(states, label.item(), neg_dists)
 
         interpolated_scores = KNNWrapper.interpolate(torch.stack(all_knn_probs), lm_logits, self.lmbda) # (nonpad, vocab)
         output[nonpad_mask] = interpolated_scores
         return output
 
-    def get_knn_log_prob(self, query, pointers, perform_search):
+    def get_dists_and_states(self, query, pointers, paired_states, perform_search):
+        """Modified this function to return paired states as well.
+
+        Formerly called get_knn_log_prob (see retomaton.py).
+        
+        The returned state is -1 if it corresponds to a KNN, and an integer otherwise."""
         pointer_dists = torch.tensor([[]]).to(self.device)
         if pointers is not None and pointers.numel() > 0 and not self.recompute_dists:
             pointer_vectors = self.reconstruct_ids(pointers)
@@ -212,21 +256,23 @@ class SuffixDfaWrapper(KNNWrapper):
         if perform_search:
             dists, knns = self.get_knns(query.unsqueeze(0)) # (1, k)
             dists, knns = dists.squeeze(0), knns.squeeze(0) # (k, )
+            states = -torch.ones_like(knns)
             if pointers is not None and pointers.numel() > 0:
                 knns = torch.cat([knns, pointers], axis=-1)
                 dists = torch.cat([dists, pointer_dists], axis=-1)
+                states = torch.cat([states, paired_states], axis=-1)
         else:
             knns = pointers
             dists = pointer_dists
+            states = paired_states
 
         if self.recompute_dists:
             knns_vecs = torch.from_numpy(self.keys[knns]).to(self.device)
-            dists = self.dist_func(query, knns_vecs) 
+            dists = self.dist_func(query, knns_vecs)
         
         neg_dists = -dists
-        knn_log_probs, vals_at_knns = self.knns_to_log_prob(knns, neg_dists)
         
-        return knn_log_probs, knns, neg_dists, vals_at_knns
+        return knns, neg_dists, states
 
     def extend_pointers_using_clusters(self, pointers):
         if pointers.numel() == 0:

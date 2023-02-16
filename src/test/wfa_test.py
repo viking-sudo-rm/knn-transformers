@@ -58,3 +58,23 @@ class WFATest(TestCase):
     self.assertEqual(dfa.forward(""), True)
     self.assertEqual(dfa.forward("a"), False)
     self.assertEqual(dfa.forward("aa"), True)
+
+  def test_add_edge_sorted(self):
+    dfa = wfa.WFA(10)
+    for _ in range(10):
+      dfa.add_state()
+    dfa.add_edge(0, "b", 2)
+    self.assertEqual(dfa.transitions[0], [("b", 2)])
+    dfa.add_edge(0, "a", 6)
+    self.assertEqual(dfa.transitions[0], [("a", 6), ("b", 2)])
+
+  def test_toggle_failures(self):
+    dfa = wfa.WFA(10, failures=True)
+    dfa.add_state()
+    dfa.add_state()
+    dfa.add_edge(0, "a", 1)
+    dfa.failures[1] = 0
+    dfa.use_failures(True)
+    self.assertEqual(dfa.transition("aa"), 1)
+    dfa.use_failures(False)
+    self.assertEqual(dfa.transition("aa"), -1)

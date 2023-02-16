@@ -27,9 +27,7 @@ def _binary_search(key, pairs, start, stop) -> int:
         stop: First invalid pair.
     """
     if start + 1 == stop:
-        if pairs[start][0] == key:
-            return start
-        return stop
+        return start
 
     mid_idx = (start + stop) // 2
     mid_key, _ = pairs[mid_idx]

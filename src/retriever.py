@@ -30,52 +30,28 @@ class Retriever:
     self.add_initial = add_initial
     self.solid_only = solid_only
 
-    # self.n_retrievals = 0
-    # self.retrieved = defaultdict(int)
-
   def get_initial_states(self):
     return torch.LongTensor([self.dfa.initial]) if self.add_initial else torch.LongTensor([])
 
-  def get_pointers(self, states):
+  def get_pointers(self, states) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return a list of pointers, as well as the states they came from."""
     pointers = []
-    for state in states:
+    paired_states = []
+    # FIXME: Tensor iterator memory leak.
+    for idx in range(len(states)):
+      state = states[idx]
       # For some reason, state.item() is critical here?
       pointers_gen = self.gen_pointers_from_state(state.item())
       if self.solid_only:
-        pointers_gen = ((ptr, x) for ptr, x in pointers_gen if self.solid_states[ptr] == state)
+        pointers_gen = (ptr for ptr in pointers_gen if self.solid_states[ptr] == state)
       if self.max_pointers != -1:
         pointers_gen = islice(pointers_gen, self.max_pointers)
-      pointers.extend(ptr for ptr, _ in pointers_gen)
+      prev_len = len(pointers)
+      pointers.extend(pointers_gen)
+      new_len = len(pointers)
+      paired_states.extend(state for _ in range(new_len - prev_len))
     # Long tensor required for using pointers as indices.
-    return torch.LongTensor(pointers)
-
-  @torch.no_grad()
-  def get_states(self, pointers, token, dists=None):
-    indices = []
-    states = []
-    # Enumerating tensors is gross for some reason.
-    for idx in range(len(pointers)):
-      ptr = pointers[idx].item()
-      state = self.solid_states[ptr]
-      next_state = self.dfa.next_state(state, token)
-      if not self.filter_state(next_state):
-        indices.append(idx)
-        states.append(next_state)
-
-    # FIXME: Use pre-allocated arrays instead of lists.
-
-    states = torch.LongTensor(states)
-    if dists is None:
-      return states
-    dists = dists[indices]
-    states = states[dists.argsort(descending=True)]
-    if self.max_states != -1:
-        states = states[:self.max_states]
-    return states
-
-  def filter_state(self, state: int) -> bool:
-    return state == -1 or (self.factor_lengths is not None and self.factor_lengths[state] < self.min_factor_length)
-    # return state is None or (self.factor_lengths is not None and self.factor_lengths[state] < self.min_factor_length)
+    return torch.LongTensor(pointers), torch.LongTensor(paired_states)
 
   def gen_pointers_from_state(self, state: int) -> Iterable[int]:
     """Get pointers out of a state in the DFA."""
@@ -99,7 +75,45 @@ class Retriever:
       ptr = self.dfa.weights[q]
       if ptr != -1:
         counter += 1
-        yield ptr, q
+        yield ptr
 
       if q in self.inverse_failures:
         queue.extend(self.inverse_failures[q])
+
+  @torch.no_grad()
+  def transition(self, states, token, neg_dists=None):
+    """Follow state transitions given token.
+
+    If there are too many valid states after transitioning, filter them based on distance.
+    
+    FIXME: Use pre-allocated arrays instead of lists."""
+    indices = []
+    next_states = []
+    for idx in range(len(states)):
+      state = states[idx].item()
+      next_state = self.dfa.next_state(state, token)
+      if not self.filter_state(next_state):
+        indices.append(idx)
+        next_states.append(next_state)
+
+    next_states = torch.LongTensor(next_states)
+    indices = torch.LongTensor(indices)
+    if neg_dists is None or self.max_states == -1:
+      return next_states
+
+    neg_dists = neg_dists[indices]
+    perm = neg_dists.argsort(descending=True)
+    next_states = next_states[perm][:self.max_states]
+    indices = indices[perm][:self.max_states]
+    return next_states, indices
+
+  @torch.no_grad()
+  def solidify(self, states, knns):
+    """Look up the solid state for pointers coming from KNN search."""
+    knns = knns.numpy()
+    solid_states = torch.tensor(self.solid_states[knns])
+    return torch.where(states == -1, solid_states, states)
+
+  def filter_state(self, state: int) -> bool:
+    return state == -1 or (self.factor_lengths is not None and self.factor_lengths[state] < self.min_factor_length)
+    # return state is None or (self.factor_lengths is not None and self.factor_lengths[state] < self.min_factor_length)

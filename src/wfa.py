@@ -96,18 +96,21 @@ class WFA:
   def add_edge(self, state1, token, state2) -> bool:
     transitions = self.transitions[state1]
     idx = binary_search(token, transitions)
-    if idx == len(transitions):
-      transitions.insert(idx, (token, state2))
+    entry = (token, state2)
+    if not transitions:
+      transitions.append(entry)
       return True
     key, target = transitions[idx]
-    if key != token:
-      transitions.insert(idx, (token, state2))
+    if token < key:
+      transitions.insert(idx, entry)
       return True
-    if target == state2:
-      return False
-    transitions[idx] = (token, state2)
-    return True
-  
+    elif token == key:
+      transitions[idx] = entry
+      return True
+    else:
+      transitions.insert(idx + 1, entry)
+      return True
+
   def remove_edge(self, state: State, token: Token) -> bool:
     transitions = self.transitions[state]
     idx = binary_search(token, transitions)

@@ -26,8 +26,8 @@ class SuffixDfaBuilder:
   To understand the suffix oracle version, consult Figure 4 of "Factor oracle: a new structure for pattern matching"
   """
 
-  def __init__(self, dstore_size, oracle: bool = False):
-    self.oracle = oracle
+  def __init__(self, dstore_size, build_method: str = None):
+    self.oracle = (build_method == "oracle")
 
     n_states = 2 * dstore_size
     self.dfa = WFA(n_states, failures=True)
@@ -39,6 +39,7 @@ class SuffixDfaBuilder:
     self.initial = None
     self.last = None
 
+    # TODO: Solid states don't start with 0?
     self.dfa.solid_states = -np.ones(dstore_size + 1, dtype=np.int32)
     self.solid_states = self.dfa.solid_states
 
@@ -67,9 +68,8 @@ class SuffixDfaBuilder:
   def extend(self, ptr, token):
     new = self.dfa.add_state(ptr + 1)
     self.L[new] = self.L[self.last] + 1
-    self.solid_states[ptr] = new
     # self.L.append(self.L[self.last] + 1)
-    # self.solid_states.append(new)
+    self.solid_states[ptr + 1] = new  # Fixed to have initial state.
     state = self.last
 
     # Traverse failure path to 1) add edges to new state and 2) find first state with `token` transition.
